@@ -29,8 +29,14 @@ module mt_cluster_stub (
     output wire         l2_rsp_ready,
     input  wire [127:0] l2_rsp_rdata,
 
-    output wire         mt_irq
+    output wire         mt_irq,
+
+    output wire [31:0]  perf_dma,
+    output wire [31:0]  perf_mma
 );
+    assign perf_dma = 32'd0;
+    assign perf_mma = 32'd0;
+
     assign l2_req_valid = 1'b0;
     assign l2_req_write = 1'b0;
     assign l2_req_addr  = 32'd0;

@@ -137,6 +137,11 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
     int32_t sum = 0, sy = 0, sx = 0;
     int gy, gx;
     uint32_t start = mt_rd_mcycle();
+    uint32_t hot = 0, dma_stall, busy;
+
+    /* Reading either profiling counter clears both (see ares_core_complex). */
+    (void)ARES_MMIO32(0xE0000018u);
+    (void)ARES_MMIO32(0xE000001Cu);
 
     net_pad(&L[0]);
     if (net_conv(&L[0], cmds) != 0) { printf("layer1 error\n"); return; }
@@ -160,12 +165,17 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
         }
     }
 
+    hot       = mt_rd_mcycle() - start;
+    dma_stall = ARES_MMIO32(0xE0000018u);
+    busy      = ARES_MMIO32(0xE000001Cu);
+
     if (sum > 0)
-        printf("  net: cell=(%d,%d) t=%u\n",
+        printf("  net: cell=(%d,%d) t=%u busy=%u dma_stall=%u\n",
                (int)((sx * 10) / sum) / 10, (int)((sy * 10) / sum) / 10,
-               (unsigned)(mt_rd_mcycle() - start));
+               (unsigned)hot, (unsigned)busy, (unsigned)dma_stall);
     else
-        printf("  net: no detection t=%u\n", (unsigned)(mt_rd_mcycle() - start));
+        printf("  net: no detection t=%u busy=%u dma_stall=%u\n",
+               (unsigned)hot, (unsigned)busy, (unsigned)dma_stall);
 }
 
 int yolo_camera_run(void)

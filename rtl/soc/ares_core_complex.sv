@@ -114,6 +114,7 @@ module ares_core_complex #(
   logic [31:0] mt_reg_wr_data;
   logic        mt_status_rd;
   logic [31:0] mt_status, mt_result;
+  logic [31:0] mt_perf_dma, mt_perf_mma;
 
 `ifdef ARES_NO_MT
   // Bring-up builds replace the accelerator with a port-compatible stub.
@@ -128,7 +129,8 @@ module ares_core_complex #(
     .l2_req_write(mt_l2_req_write), .l2_req_addr(mt_l2_req_addr),
     .l2_req_wdata(mt_l2_req_wdata), .l2_req_wstrb(mt_l2_req_wstrb),
     .l2_rsp_valid(mt_l2_rsp_valid), .l2_rsp_ready(mt_l2_rsp_ready), .l2_rsp_rdata(mt_l2_rsp_rdata),
-    .mt_irq(mt_irq)
+    .mt_irq(mt_irq),
+    .perf_dma(mt_perf_dma), .perf_mma(mt_perf_mma)
   );
 `else
   mt_cluster u_mt (
@@ -139,7 +141,8 @@ module ares_core_complex #(
     .l2_req_write(mt_l2_req_write), .l2_req_addr(mt_l2_req_addr),
     .l2_req_wdata(mt_l2_req_wdata), .l2_req_wstrb(mt_l2_req_wstrb),
     .l2_rsp_valid(mt_l2_rsp_valid), .l2_rsp_ready(mt_l2_rsp_ready), .l2_rsp_rdata(mt_l2_rsp_rdata),
-    .mt_irq(mt_irq)
+    .mt_irq(mt_irq),
+    .perf_dma(mt_perf_dma), .perf_mma(mt_perf_mma)
   );
 `endif
 
@@ -174,6 +177,7 @@ module ares_core_complex #(
   assign mt_reg_wr_data = b_req_wdata;
   assign mt_status_rd = (bstate_q == B_IDLE) && b_req_valid && b_req_ready &&
                         !b_req_write && mt_local && (mt_idx == 3'd4);
+
 
   assign b_l2_req_valid = (bstate_q == B_L2_REQ);
   assign b_l2_req_write = b_write_q;
@@ -220,6 +224,8 @@ module ares_core_complex #(
               case (mt_idx)
                 3'd4: b_rsp_data_q <= mt_status;
                 3'd5: b_rsp_data_q <= mt_result;
+                3'd6: b_rsp_data_q <= mt_perf_dma;
+                3'd7: b_rsp_data_q <= mt_perf_mma;
                 default: b_rsp_data_q <= 32'd0;
               endcase
             end else begin

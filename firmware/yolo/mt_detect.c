@@ -126,7 +126,12 @@ int mt_detect_command(int argc, char **argv)
                (unsigned)L[0].nmt, (unsigned)L[1].nmt,
                (unsigned)L[2].nmt, (unsigned)L[3].nmt);
 
+    uint32_t perf_dma0, perf_busy0;
+
     mt_reset_status();
+    /* Profiling counters are free running; take a snapshot and subtract. */
+    perf_dma0 = ARES_MMIO32(0xE0000018u);
+    perf_busy0 = ARES_MMIO32(0xE000001Cu);
     start = mt_rd_mcycle();
     ares_mmio_write(ARES_LED_ADDR, 1u);
 
@@ -191,6 +196,17 @@ int mt_detect_command(int argc, char **argv)
     printf("miniTensor detector: %d/%d images decoded, %u commands/image,"
                " %u cycles, golden diff %d bytes\n", images_ok, (int)DET_IMG_COUNT,
                (unsigned)(cmds / DET_IMG_COUNT), (unsigned)(end - start), bad);
+
+    /* P1 baseline: where does the time go? */
+    {
+        unsigned dma_stall = (unsigned)(ARES_MMIO32(0xE0000018u) - perf_dma0);
+        unsigned busy      = (unsigned)(ARES_MMIO32(0xE000001Cu) - perf_busy0);
+        unsigned total     = (unsigned)(end - start);
+        printf("perf: total=%u busy=%u dma_stall=%u busy_pct=%u dma_pct=%u\n",
+               total, busy, dma_stall,
+               total ? (unsigned)(busy * 100u / total) : 0u,
+               total ? (unsigned)(dma_stall * 100u / total) : 0u);
+    }
     if (images_ok == 0) {
         printf("miniTensor detector FAILED: no detections\n");
         halt(50);

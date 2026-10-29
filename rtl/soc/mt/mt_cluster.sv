@@ -25,7 +25,14 @@ module mt_cluster #(
   output logic         l2_rsp_ready,
   input  logic [127:0] l2_rsp_rdata,
 
-  output logic         mt_irq
+  output logic         mt_irq,
+
+  // ---------------------------------------------------------- P1 profiling
+  // Cycles the accelerator spent waiting for the DMA engine and for the MMA
+  // array.  Cleared when the CPU reads them, so a firmware loop can measure
+  // one inference at a time.
+  output logic [31:0]  perf_dma,
+  output logic [31:0]  perf_mma
 );
   import minitensor_pkg::*;
 
@@ -34,6 +41,24 @@ module mt_cluster #(
   // only uses these four channels.
   xif_req_t xif_req;
   xif_rsp_t xif_rsp;
+
+  // Profiling counters for P1.  The firmware reads both, subtracts, and knows
+  // whether the frame time goes into the memory supply or into the array.
+  //   perf_dma : cycles where the DMA asked for memory and did not get it
+  //   perf_mma : cycles where the cluster was busy at all (status[0])
+  wire dma_stall = (mem_rd_valid && !mem_rd_ready) ||
+                   (mem_wr_valid && !mem_wr_ready);
+  wire cluster_busy = status[0];
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      perf_dma <= 32'd0;
+      perf_mma <= 32'd0;
+    end else begin
+      if (dma_stall)    perf_dma <= perf_dma + 32'd1;
+      if (cluster_busy) perf_mma <= perf_mma + 32'd1;
+    end
+  end
 
   logic        mem_rd_valid, mem_rd_ready;
   logic [31:0] mem_rd_addr;
