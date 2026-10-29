@@ -1,4 +1,4 @@
-﻿/*
+/*
  * mt_detect.c -- deploy the trained, quantised detector on miniTensor.
  *
  * The weights come from tools/model/pack_weights.py, which quantises the
@@ -16,6 +16,7 @@
 #include "mt.h"
 #include "mt_net.h"
 #include "mt_detect_weights.h"
+#include "mt_detect.h"
 
 #define DET_IMG_BYTES   (32u * 32u * 4u)
 #define DET_OUT_BYTES   (8u * 8u * 8u)
@@ -36,7 +37,7 @@
 
 static volatile uint8_t *const det_buf = (volatile uint8_t *)(uintptr_t)MT_BUF_BASE;
 
-static void det_copy_to_scratch(uint32_t off, const unsigned char *src, uint32_t n)
+void det_copy_to_scratch(uint32_t off, const unsigned char *src, uint32_t n)
 {
     uint32_t i;
 
@@ -64,7 +65,7 @@ static void det_cfg_from(const unsigned char *cfg, net_layer_t *L)
     L->nmt   = cfg[4];   /* weight tile size chosen by the packer */
 }
 
-static void det_make_layers(net_layer_t *L)
+void det_make_layers(net_layer_t *L)
 {
     L[0] = (net_layer_t){32u, 32u, 4u, 8u, 3u, 1u, 1u, 0, 0u, 0,
                          NET_IMAGE, PAD_BUF, OUT_BUF,
