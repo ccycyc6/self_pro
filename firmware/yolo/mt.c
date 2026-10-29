@@ -24,8 +24,8 @@ static int mt_poll(uint32_t *status_out)
     return 0;
 }
 
-/* Commands queued since the last drain. */
-static uint32_t mt_queued;
+/* Commands queued since the last drain (shared with the inline pusher). */
+uint32_t mt_queued;
 
 int mt_drain(void)
 {
@@ -55,19 +55,7 @@ int mt_drain(void)
     return 0;
 }
 
-int mt_push(uint32_t instr, uint32_t rs1, uint32_t rs2)
-{
-    MT_MMIO32(MT_INSTR) = instr;
-    MT_MMIO32(MT_RS1)   = rs1;
-    MT_MMIO32(MT_RS2)   = rs2;
-    MT_MMIO32(MT_KICK)  = 1u;
 
-    if (++mt_queued >= MT_BATCH)
-    {
-        return mt_drain();
-    }
-    return 0;
-}
 
 int mt_exec(uint32_t instr, uint32_t rs1, uint32_t rs2)
 {

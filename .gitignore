@@ -36,3 +36,4 @@ venv/
 # ---------------------------------------------------------------- local
 uart.log
 *.local
+fpga/pango/program_run.tcl

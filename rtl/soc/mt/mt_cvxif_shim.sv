@@ -66,8 +66,7 @@ module mt_cvxif_shim #(
   // then issues count GEMMs back to back, adding the staged row steps between
   // them.  That turns the driver's inner loop (three commands per output group)
   // into one push.
-  localparam logic [31:0] FUNCT7_GEMM = 32'h05;
-  localparam logic [4:0]  REP_MAX     = 5'd16;
+
 
   typedef enum logic [2:0] {
     S_IDLE,
@@ -143,8 +142,8 @@ module mt_cvxif_shim #(
 
   // The rd field of a GEMM instruction carries the repeat count; every other
   // instruction leaves it zero and is issued once.
-  assign rep_stg = (stg_instr_q[31:25] == FUNCT7_GEMM[6:0]) ? stg_instr_q[11:7]
-                                                          : 8'd0;
+  assign rep_stg = (stg_instr_q[31:25] == 7'h05) ? stg_instr_q[11:7]
+                                                 : 8'd0;
 
   assign status      = {27'd0, kick_err_q, accept_err_q, err_q, done_q, busy};
   assign result_data = result_data_q;
