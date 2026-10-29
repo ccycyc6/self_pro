@@ -97,7 +97,9 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
      * by one, the C row by a whole tile column.  Written once per layer. */
     /* A row stays put for the whole run (it is the activation row for this
      * tile column); only the weight row and the C row advance. */
-    MT_SET_STEPS(0u, 1u, ntiles4);
+    /* NOTE: the steps are re-armed per tap below, because the epilogue switches
+     * them to its own pattern -- leaving the last one armed silently corrupts
+     * the next row's GEMMs. */
 
     if ((rc = mt_push(MT_LOAD, B + L->cfg_off,
                       MT_ROWS(UB_CFG, L->leaky ? 2u : 1u))) != 0) return rc;
@@ -170,6 +172,10 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                     uint32_t qbase = (((((kx * ng) + g) * PH) + ky) * ntiles) + hrow;
                     uint32_t wb = UB_WT + ((q - tc) * njt);
 
+                    /* Re-arm the GEMM burst steps: A row fixed, weight row and
+                     * C row advance by one and ntiles4. */
+                    MT_SET_STEPS(0u, 1u, ntiles4);
+
                     /* UB_A holds four activation rows and consecutive tiles are
                      * contiguous in memory, so one DMA brings in four tiles'
                      * worth of A.  That removes three quarters of the LOADs
@@ -225,45 +231,41 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                     uint32_t n = (ntiles - t0) < 8u ? (ntiles - t0) : 8u;
                     uint32_t off16 = t0 * 16u;
 
-                    for (t = 0; t < n; t++)
+                    /* One epilogue per chunk: the C row advances by one tile
+                     * column (4 rows), the output row by one. */
+                    MT_SET_STEPS(4u, 0u, 1u);
+                    if ((rc = mt_push(MT_BURST(MT_EPILOGUE, n),
+                                      MT_EPI_RS1(crow + (t0 * 4u),
+                                                 UB_BIAS + (j * 4u)),
+                                      MT_EPI_RS2(UB_OUT, UB_CFG))) != 0)
                     {
-                        if ((rc = mt_push(MT_EPILOGUE,
-                                          MT_EPI_RS1(crow + ((t0 + t) * 4u),
-                                                     UB_BIAS + (j * 4u)),
-                                          MT_EPI_RS2(UB_OUT + t, UB_CFG))) != 0)
-                        {
-                            return rc;
-                        }
-                        count++;
+                        return rc;
                     }
+                    count++;
 
                     /* LeakyReLU as max(x, a*x), using the second config row.
                      * The second epilogue writes to UB_SKIP, which is still
                      * free here (the residual loads it later). */
                     if (L->leaky != 0u)
                     {
-                        for (t = 0; t < n; t++)
+                        MT_SET_STEPS(4u, 0u, 1u);
+                        if ((rc = mt_push(MT_BURST(MT_EPILOGUE, n),
+                                          MT_EPI_RS1(crow + (t0 * 4u),
+                                                     UB_BIAS + (j * 4u)),
+                                          MT_EPI_RS2(UB_SKIP, UB_CFG + 1u))) != 0)
                         {
-                            if ((rc = mt_push(MT_EPILOGUE,
-                                              MT_EPI_RS1(crow + ((t0 + t) * 4u),
-                                                         UB_BIAS + (j * 4u)),
-                                              MT_EPI_RS2(UB_SKIP + t,
-                                                         UB_CFG + 1u))) != 0)
-                            {
-                                return rc;
-                            }
-                            count++;
+                            return rc;
                         }
-                        for (t = 0; t < n; t++)
+                        count++;
+
+                        MT_SET_STEPS(1u, 1u, 1u);
+                        if ((rc = mt_push(MT_BURST(MT_VEC_MAX8, n),
+                                          MT_VEC_RS1(UB_OUT, UB_SKIP),
+                                          MT_VEC_RS2(UB_OUT))) != 0)
                         {
-                            if ((rc = mt_push(MT_VEC_MAX8,
-                                              MT_VEC_RS1(UB_OUT + t, UB_SKIP + t),
-                                              MT_VEC_RS2(UB_OUT + t))) != 0)
-                            {
-                                return rc;
-                            }
-                            count++;
+                            return rc;
                         }
+                        count++;
                     }
 
                     /* Residual: bring in the matching skip rows and combine
@@ -276,28 +278,24 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                         if ((rc = mt_push(MT_LOAD, B + sbase,
                                           MT_ROWS(UB_SKIP, n))) != 0) return rc;
                         count++;
-                        for (t = 0; t < n; t++)
+                        MT_SET_STEPS(1u, 1u, 1u);
+                        if ((rc = mt_push(MT_BURST(MT_VEC_ADD8, n),
+                                          MT_VEC_RS1(UB_OUT, UB_SKIP),
+                                          MT_VEC_RS2(UB_OUT))) != 0)
                         {
-                            if ((rc = mt_push(MT_VEC_ADD8,
-                                              MT_VEC_RS1(UB_OUT + t, UB_SKIP + t),
-                                              MT_VEC_RS2(UB_OUT + t))) != 0)
+                            return rc;
+                        }
+                        count++;
+                        if (L->skip == 2u)
+                        {
+                            MT_SET_STEPS(1u, 1u, 1u);
+                            if ((rc = mt_push(MT_BURST(MT_VEC_RELU8, n),
+                                              MT_VEC_RS1(UB_OUT, UB_OUT),
+                                              MT_VEC_RS2(UB_OUT))) != 0)
                             {
                                 return rc;
                             }
                             count++;
-                        }
-                        if (L->skip == 2u)
-                        {
-                            for (t = 0; t < n; t++)
-                            {
-                                if ((rc = mt_push(MT_VEC_RELU8,
-                                                  MT_VEC_RS1(UB_OUT + t, UB_OUT + t),
-                                                  MT_VEC_RS2(UB_OUT + t))) != 0)
-                                {
-                                    return rc;
-                                }
-                                count++;
-                            }
                         }
                     }
 
