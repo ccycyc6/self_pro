@@ -573,13 +573,15 @@ module video_fb_top #(
     // ------------------------------------------------------ camera thumbnail
     // The window belongs to the SoC instance below; when BOARD_SOC is not
     // defined nothing reads it, which is fine (the RAM is just unused).
-    wire        cam_wr_en, cam_wr_bank, cam_tog;
-    wire [10:0] cam_wr_addr;
-    wire [15:0] cam_wr_data;
+    wire        cam_wr_en, cam_tog;
+    wire [27:0] cam_wr_word;
+    wire [31:0] cam_wr_cnt;
     wire [10:0] cam_rd_addr;
     wire        cam_rd_bank;
     wire [15:0] cam_rd_data;
     wire [31:0] cam_frame_w;
+    wire        cam_fifo_empty, cam_fifo_rd_en;
+    wire [27:0] cam_fifo_word;
 
     cam_cap u_cam_cap (
         .pixel_clk    (pixel_clk_io),
@@ -588,22 +590,37 @@ module video_fb_top #(
         .pixel_rgb565 (pixel_rgb565),
         .pixel_vsync  (pixel_vsync),
         .wr_en        (cam_wr_en),
-        .wr_addr      (cam_wr_addr),
-        .wr_bank      (cam_wr_bank),
-        .wr_data      (cam_wr_data),
-        .frame_tog    (cam_tog)
+        .wr_data      (cam_wr_word),
+        .frame_tog    (cam_tog),
+        .wr_cnt       (cam_wr_cnt)
     );
 
-    cam_buf u_cam_buf (
+    cam_fifo #(
+        .WIDTH(28),
+        .AW   (5),
+        .DEPTH(32)
+    ) u_cam_fifo (
         .wr_clk  (pixel_clk_io),
+        .wr_rst  (pixel_rst),
         .wr_en   (cam_wr_en),
-        .wr_addr (cam_wr_addr),
-        .wr_bank (cam_wr_bank),
-        .wr_data (cam_wr_data),
+        .wr_data (cam_wr_word),
+        .full    (),
         .rd_clk  (clk_27m),
-        .rd_addr (cam_rd_addr),
-        .rd_bank (cam_rd_bank),
-        .rd_data (cam_rd_data)
+        .rd_rst  (rst_sys),
+        .rd_en   (cam_fifo_rd_en),
+        .rd_data (cam_fifo_word),
+        .empty   (cam_fifo_empty)
+    );
+
+    cam_store u_cam_store (
+        .clk         (clk_27m),
+        .rst         (rst_sys),
+        .fifo_data   (cam_fifo_word),
+        .fifo_empty  (cam_fifo_empty),
+        .fifo_rd_en  (cam_fifo_rd_en),
+        .rd_addr     (cam_rd_addr),
+        .rd_bank     (cam_rd_bank),
+        .rd_data     (cam_rd_data)
     );
 
     // Completed-frame counter on the SoC clock (toggle synchroniser).
@@ -622,6 +639,18 @@ module video_fb_top #(
     end
 
     assign cam_frame_w = cam_frame_q;
+
+    // Debug: how many samples the capture has written (2FF, count only).
+    reg [31:0] cam_wrcnt_s1, cam_wrcnt_s2;
+    always @(posedge clk_27m) begin
+        if (rst_sys) begin
+            cam_wrcnt_s1 <= 32'd0;
+            cam_wrcnt_s2 <= 32'd0;
+        end else begin
+            cam_wrcnt_s1 <= cam_wr_cnt;
+            cam_wrcnt_s2 <= cam_wrcnt_s1;
+        end
+    end
 
     video_fb_status u_status (
         .clk_27m        (clk_27m),
@@ -694,6 +723,7 @@ module video_fb_top #(
         .cam_bank        (cam_rd_bank),
         .cam_data        (cam_rd_data),
         .cam_frame       (cam_frame_w),
+        .cam_wrcnt       (cam_wrcnt_s2),
         .mt_irq          (),
         .dbg_halt        (soc_dbg_halt),
         .dbg_pc          (soc_dbg_pc),

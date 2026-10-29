@@ -29,11 +29,12 @@ module ares_mmio_bus (
   output logic [10:0] cam_addr,
   output logic        cam_bank,
   input  logic [15:0] cam_data,
-  input  logic [31:0] cam_frame
+  input  logic [31:0] cam_frame,
+  input  logic [31:0] cam_wrcnt
 );
   import ares_pkg::*;
 
-  typedef enum logic [1:0] {M_IDLE, M_RESP, M_CAM} state_t;
+  typedef enum logic [1:0] {M_IDLE, M_RESP, M_CAM, M_CAM2} state_t;
   state_t state_q;
   logic [31:0] rsp_data_q;
 
@@ -102,13 +103,19 @@ module ares_mmio_bus (
               if (sel_clint) rsp_data_q <= clint_rdata;
               else if (sel_uart) rsp_data_q <= uart_rdata;
               else if (sel_gpio) rsp_data_q <= gpio_rdata;
-              else if (sel_camctl) rsp_data_q <= cam_frame;
+              else if (sel_camctl) rsp_data_q <= req_addr[2] ? cam_wrcnt : cam_frame;
               else rsp_data_q <= 32'd0;
               state_q <= M_RESP;
             end
           end
         end
         M_CAM: begin
+          // The thumbnail RAM is read with one cycle of latency; the address
+          // register was written on the transition into this state, so wait
+          // one more cycle before latching the data.
+          state_q <= M_CAM2;
+        end
+        M_CAM2: begin
           rsp_data_q <= {16'd0, cam_data};
           state_q <= M_RESP;
         end
