@@ -118,6 +118,42 @@ int yolo_camera_run(void)
             }
         }
 
+#ifdef CAM_DEBUG
+        /* Diagnostic: prove what the accelerator is being fed.  An 8x8 ASCII
+         * thumbnail of the 32x32 luma (4x4 block average) plus min/max/mean
+         * tells "the capture path is fine, the model just does not fire"
+         * apart from "the capture path is broken". */
+        {
+            uint32_t i2, mn = 255u, mx = 0u, sm = 0u;
+            int by, bx;
+
+            for (i2 = 0; i2 < 1024u; i2++) {
+                uint32_t v = img[i2 * 4u];
+                if (v < mn) mn = v;
+                if (v > mx) mx = v;
+                sm += v;
+            }
+            printf("  cam stat min=%u max=%u mean=%u\n",
+                   (unsigned)mn, (unsigned)mx, (unsigned)(sm / 1024u));
+
+            for (by = 0; by < 8; by++) {
+                char line[9];
+                for (bx = 0; bx < 8; bx++) {
+                    uint32_t acc = 0;
+                    int yy, xx;
+                    for (yy = 0; yy < 4; yy++)
+                        for (xx = 0; xx < 4; xx++)
+                            acc += img[((uint32_t)(by * 4 + yy) * 32u +
+                                        (uint32_t)(bx * 4 + xx)) * 4u];
+                    acc /= 16u;
+                    line[bx] = " .:-=+*#"[acc >> 5];   /* 0..7 */
+                }
+                line[8] = 0;
+                printf("  |%s|\n", line);
+            }
+        }
+#endif
+
         if (sum > 0) {
             int cx = (int)((sx * 10) / sum) / 10;
             int cy = (int)((sy * 10) / sum) / 10;
