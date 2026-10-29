@@ -51,7 +51,7 @@ foreach f [list \
     "video_fb_top.v" "video_clk_reset.v" "video_ip_pll.v" \
     "video_fb_status.v" "video_hdmi_wrap.v" "video_pattern_gen.v" \
     "video_capture_wrap.v" "video_dvp_rgb565.v" \
-    "cam_cap.v" "cam_fifo.v" "cam_store.v" \
+    "video_osd.v" "cam_cap.v" "cam_fifo.v" "cam_store.v" \
     "legacy/wr_fram_buf.v" "legacy/rd_fram_buf.v" \
     "legacy/ipm2l_sdpram_v1_10_wr_fram_buf.v" \
     "legacy/ipm2l_sdpram_v1_10_rd_fram_buf.v" \

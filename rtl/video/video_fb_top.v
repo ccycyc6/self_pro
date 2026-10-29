@@ -112,6 +112,11 @@ module video_fb_top #(
     wire [11:0] hdmi_y_act;
     wire [15:0] fb_rgb565;
     wire        fb_vout_de;
+    wire [7:0]  hdmi_r, hdmi_g, hdmi_b;
+
+    // ------------------------------------------- detector box (SoC mailbox)
+    wire [11:0] osd_x0_w, osd_y0_w, osd_x1_w, osd_y1_w;
+    wire        osd_valid_w, osd_tog_w;
 
     video_hdmi_wrap #(
         .USE_EXT_DE     (1)
@@ -131,12 +136,32 @@ module video_fb_top #(
         .de_out         (de_out),
         .hs_out         (hs_out),
         .vs_out         (vs_out),
-        .r_out          (r_out),
-        .g_out          (g_out),
-        .b_out          (b_out),
+        .r_out          (hdmi_r),
+        .g_out          (hdmi_g),
+        .b_out          (hdmi_b),
         .hdmi_init_done (hdmi_init_done),
         .iic_scl        (iic_tx_scl),
         .iic_sda        (iic_tx_sda)
+    );
+
+    video_osd u_osd (
+        .pix_clk   (clk_pix),
+        .pix_rst   (rst_pix),
+        .x         (hdmi_x_act),
+        .y         (hdmi_y_act),
+        .de        (de_out),
+        .box_x0    (osd_x0_w),
+        .box_y0    (osd_y0_w),
+        .box_x1    (osd_x1_w),
+        .box_y1    (osd_y1_w),
+        .box_valid (osd_valid_w),
+        .box_tog   (osd_tog_w),
+        .r_in      (hdmi_r),
+        .g_in      (hdmi_g),
+        .b_in      (hdmi_b),
+        .r_out     (r_out),
+        .g_out     (g_out),
+        .b_out     (b_out)
     );
 
     // ------------------------------------------------------- camera capture
@@ -732,6 +757,12 @@ module video_fb_top #(
         .cam_frame       (cam_frame_w),
         .cam_wrcnt       (cam_wrcnt_s2),
         .cam_dbg         (cam_dbg_s2),
+        .osd_x0          (osd_x0_w),
+        .osd_y0          (osd_y0_w),
+        .osd_x1          (osd_x1_w),
+        .osd_y1          (osd_y1_w),
+        .osd_valid       (osd_valid_w),
+        .osd_tog         (osd_tog_w),
         .mt_irq          (),
         .dbg_halt        (soc_dbg_halt),
         .dbg_pc          (soc_dbg_pc),
@@ -747,6 +778,12 @@ module video_fb_top #(
     assign uart_tx = soc_uart_tx;
 `else
     assign uart_tx = v_status_uart;
+    assign osd_x0_w    = 12'd0;
+    assign osd_y0_w    = 12'd0;
+    assign osd_x1_w    = 12'd0;
+    assign osd_y1_w    = 12'd0;
+    assign osd_valid_w = 1'b0;
+    assign osd_tog_w   = 1'b0;
 `endif
 
     /* verilator lint_off UNUSEDSIGNAL */

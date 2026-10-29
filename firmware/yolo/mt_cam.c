@@ -18,6 +18,7 @@
 #define CAM_FRAME    0xD0003000u
 #define CAM_WRCNT    0xD0003004u
 #define CAM_DBG      0xD0003008u
+#define OSD_BOX_BASE 0xD0004000u     /* x0, y0, x1, y1, commit */
 
 #ifdef CAM_DEBUG
 static volatile uint32_t cam_raw[4];
@@ -180,13 +181,24 @@ int yolo_camera_run(void)
         if (sum > 0) {
             int cx = (int)((sx * 10) / sum) / 10;
             int cy = (int)((sy * 10) / sum) / 10;
-            printf("cam f=%u cell=(%d,%d) box=(%d,%d)-(%d,%d) t=%u\n",
+            uint32_t x0 = (uint32_t)(320 + cx * 20);
+            uint32_t y0 = (uint32_t)(40 + cy * 20);
+
+            printf("cam f=%u cell=(%d,%d) box=(%u,%u)-(%u,%u) t=%u\n",
                    (unsigned)frame, cx, cy,
-                   320 + cx * 20, 40 + cy * 20,
-                   320 + cx * 20 + 20, 40 + cy * 20 + 20,
+                   (unsigned)x0, (unsigned)y0,
+                   (unsigned)(x0 + 20u), (unsigned)(y0 + 20u),
                    (unsigned)(end - start));
+
+            /* Publish the box for the OSD overlay. */
+            ares_mmio_write(OSD_BOX_BASE + 0u, x0);
+            ares_mmio_write(OSD_BOX_BASE + 4u, y0);
+            ares_mmio_write(OSD_BOX_BASE + 8u, x0 + 20u);
+            ares_mmio_write(OSD_BOX_BASE + 12u, y0 + 20u);
+            ares_mmio_write(OSD_BOX_BASE + 16u, 1u);
         } else {
             printf("cam f=%u no detection\n", (unsigned)frame);
+            ares_mmio_write(OSD_BOX_BASE + 16u, 0u);
         }
     }
     return 0;

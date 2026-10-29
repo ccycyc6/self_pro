@@ -28,6 +28,13 @@ module ares_soc #(
   input  logic [31:0] cam_wrcnt,
   input  logic [23:0] cam_dbg,
 
+  output logic [11:0] osd_x0,
+  output logic [11:0] osd_y0,
+  output logic [11:0] osd_x1,
+  output logic [11:0] osd_y1,
+  output logic        osd_valid,
+  output logic        osd_tog,
+
   output logic        mt_irq,
   output logic        dbg_halt,
   output logic [31:0] dbg_pc,
@@ -125,6 +132,7 @@ module ares_soc #(
     .rsp_valid(mmio_rsp_valid), .rsp_ready(mmio_rsp_ready), .rsp_rdata(mmio_rsp_rdata),
     .timer_irq(irq_timer), .soft_irq(irq_soft),
     .uart_tx, .uart_rx, .gpio_in, .gpio_out, .gpio_dir,
-    .cam_addr, .cam_bank, .cam_data, .cam_frame, .cam_wrcnt, .cam_dbg
+    .cam_addr, .cam_bank, .cam_data, .cam_frame, .cam_wrcnt, .cam_dbg,
+    .osd_x0, .osd_y0, .osd_x1, .osd_y1, .osd_valid, .osd_tog
   );
 endmodule

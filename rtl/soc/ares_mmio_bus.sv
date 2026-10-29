@@ -31,7 +31,15 @@ module ares_mmio_bus (
   input  logic [15:0] cam_data,
   input  logic [31:0] cam_frame,
   input  logic [31:0] cam_wrcnt,
-  input  logic [23:0] cam_dbg
+  input  logic [23:0] cam_dbg,
+
+  // Detector box for the OSD (0xD000_4000 + n*4, write only)
+  output logic [11:0] osd_x0,
+  output logic [11:0] osd_y0,
+  output logic [11:0] osd_x1,
+  output logic [11:0] osd_y1,
+  output logic        osd_valid,
+  output logic        osd_tog
 );
   import ares_pkg::*;
 
@@ -44,6 +52,33 @@ module ares_mmio_bus (
   wire sel_gpio   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h1);
   wire sel_cam    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h2);
   wire sel_camctl = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h3);
+  wire sel_osd    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h4);
+
+  // ------------------------------------------------------------- OSD mailbox
+  // 0x4000..0x400C hold the box, 0x4010 commits it (bit 0 = visible) by
+  // flipping a toggle that the pixel clock domain synchronises.
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      osd_x0 <= 12'd0;
+      osd_y0 <= 12'd0;
+      osd_x1 <= 12'd0;
+      osd_y1 <= 12'd0;
+      osd_valid <= 1'b0;
+      osd_tog   <= 1'b0;
+    end else if (periph_req && req_write && sel_osd) begin
+      case (req_addr[5:2])
+        4'd0: osd_x0 <= req_wdata[11:0];
+        4'd1: osd_y0 <= req_wdata[11:0];
+        4'd2: osd_x1 <= req_wdata[11:0];
+        4'd3: osd_y1 <= req_wdata[11:0];
+        4'd4: begin
+          osd_valid <= req_wdata[0];
+          osd_tog   <= ~osd_tog;
+        end
+        default: ;
+      endcase
+    end
+  end
 
   // The camera thumbnail lives in a block RAM on the SoC clock, so its read
   // takes one cycle: M_CAM is that extra cycle.
