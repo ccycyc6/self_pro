@@ -120,6 +120,8 @@ static inline uint32_t mt_rd_mcycle(void)
  * real call costs more than the four stores it wraps. */
 extern uint32_t mt_queued;
 
+int mt_drain(void);
+
 static inline int mt_push(uint32_t instr, uint32_t rs1, uint32_t rs2)
 {
     MT_MMIO32(MT_INSTR) = instr;
@@ -133,10 +135,6 @@ static inline int mt_push(uint32_t instr, uint32_t rs1, uint32_t rs2)
     }
     return 0;
 }
-
-/* Wait for the queue to drain and report any accumulated error.  Safe to call
- * when nothing is queued. */
-int mt_drain(void);
 
 /* Issue one command and wait for completion.
  * Returns 0 on success, negative on error/timeout. */

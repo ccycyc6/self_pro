@@ -137,11 +137,11 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
     int32_t sum = 0, sy = 0, sx = 0;
     int gy, gx;
     uint32_t start = mt_rd_mcycle();
-    uint32_t hot = 0, dma_stall, busy;
+    uint32_t hot = 0, dma_stall, busy, p0d, p0b;
 
-    /* Reading either profiling counter clears both (see ares_core_complex). */
-    (void)ARES_MMIO32(0xE0000018u);
-    (void)ARES_MMIO32(0xE000001Cu);
+    /* The counters are free running, so snapshot and subtract. */
+    p0d = ARES_MMIO32(0xE0000018u);
+    p0b = ARES_MMIO32(0xE000001Cu);
 
     net_pad(&L[0]);
     if (net_conv(&L[0], cmds) != 0) { printf("layer1 error\n"); return; }
@@ -166,8 +166,8 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
     }
 
     hot       = mt_rd_mcycle() - start;
-    dma_stall = ARES_MMIO32(0xE0000018u);
-    busy      = ARES_MMIO32(0xE000001Cu);
+    dma_stall = ARES_MMIO32(0xE0000018u) - p0d;
+    busy      = ARES_MMIO32(0xE000001Cu) - p0b;
 
     if (sum > 0)
         printf("  net: cell=(%d,%d) t=%u busy=%u dma_stall=%u\n",
