@@ -30,6 +30,7 @@ module cam_cap (
     reg [9:0]  y_cnt;      // 0..719
     reg [10:0] gx, gy;     // 0..31
     reg [4:0]  xph, yph;   // 0..19 phase inside a cell
+    reg        vsync_d;
 
     wire in_x = (x_cnt >= X0) && (x_cnt < X0 + 640);
     wire in_y = (y_cnt >= Y0) && (y_cnt < Y0 + 640);
@@ -49,6 +50,7 @@ module cam_cap (
             wr_data <= 16'd0;
             wr_bank <= 1'b0;
             frame_tog <= 1'b0;
+            vsync_d   <= 1'b0;
         end else begin
             wr_en <= 1'b0;
 
@@ -100,6 +102,7 @@ module cam_cap (
             end
 
             // ------------------------------------------------------ frame end
+            vsync_d <= pixel_vsync;
             if (pixel_vsync) begin
                 x_cnt <= 11'd0;
                 y_cnt <= 10'd0;
@@ -108,21 +111,13 @@ module cam_cap (
                 xph   <= 5'd0;
                 yph   <= 5'd0;
             end
-        end
-    end
 
-    // ------------------------------------------------------------ bank swap
-    reg vsync_d;
-    always @(posedge pixel_clk) begin
-        if (pixel_rst) begin
-            vsync_d   <= 1'b0;
-            frame_tog <= 1'b0;
-        end else begin
-            vsync_d <= pixel_vsync;
+            // Rising edge of vsync: hand the finished bank to the SoC side.
             if (pixel_vsync && !vsync_d) begin
                 wr_bank   <= ~wr_bank;
                 frame_tog <= ~frame_tog;
             end
         end
     end
+
 endmodule

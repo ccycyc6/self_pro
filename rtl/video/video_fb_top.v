@@ -73,13 +73,7 @@ module video_fb_top #(
     // ---------------------------------------------------------- board status
     output wire [7:0]  led,
     output wire        uart_tx,
-    input  wire        uart_rx,       // B24, used by the SoC boot loader
-
-    // ------------------------------------------- 32x32 camera thumbnail window
-    input  wire [10:0] cam_addr,
-    input  wire        cam_bank,
-    output wire [15:0] cam_data,
-    output wire [31:0] cam_frame
+    input  wire        uart_rx        // B24, used by the SoC boot loader
 );
 
     // ------------------------------------------------------- clock / reset
@@ -577,9 +571,15 @@ module video_fb_top #(
     end
 
     // ------------------------------------------------------ camera thumbnail
+    // The window belongs to the SoC instance below; when BOARD_SOC is not
+    // defined nothing reads it, which is fine (the RAM is just unused).
     wire        cam_wr_en, cam_wr_bank, cam_tog;
     wire [10:0] cam_wr_addr;
     wire [15:0] cam_wr_data;
+    wire [10:0] cam_rd_addr;
+    wire        cam_rd_bank;
+    wire [15:0] cam_rd_data;
+    wire [31:0] cam_frame_w;
 
     cam_cap u_cam_cap (
         .pixel_clk    (pixel_clk_io),
@@ -601,9 +601,9 @@ module video_fb_top #(
         .wr_bank (cam_wr_bank),
         .wr_data (cam_wr_data),
         .rd_clk  (clk_27m),
-        .rd_addr (cam_addr),
-        .rd_bank (cam_bank),
-        .rd_data (cam_data)
+        .rd_addr (cam_rd_addr),
+        .rd_bank (cam_rd_bank),
+        .rd_data (cam_rd_data)
     );
 
     // Completed-frame counter on the SoC clock (toggle synchroniser).
@@ -621,7 +621,7 @@ module video_fb_top #(
         end
     end
 
-    assign cam_frame = cam_frame_q;
+    assign cam_frame_w = cam_frame_q;
 
     video_fb_status u_status (
         .clk_27m        (clk_27m),
@@ -690,10 +690,10 @@ module video_fb_top #(
         .gpio_in         (32'd0),
         .gpio_out        (),
         .gpio_dir        (),
-        .cam_addr        (cam_addr),
-        .cam_bank        (cam_bank),
-        .cam_data        (cam_data),
-        .cam_frame       (cam_frame),
+        .cam_addr        (cam_rd_addr),
+        .cam_bank        (cam_rd_bank),
+        .cam_data        (cam_rd_data),
+        .cam_frame       (cam_frame_w),
         .mt_irq          (),
         .dbg_halt        (soc_dbg_halt),
         .dbg_pc          (soc_dbg_pc),
