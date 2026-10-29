@@ -73,7 +73,13 @@ module video_fb_top #(
     // ---------------------------------------------------------- board status
     output wire [7:0]  led,
     output wire        uart_tx,
-    input  wire        uart_rx        // B24, used by the SoC boot loader
+    input  wire        uart_rx,       // B24, used by the SoC boot loader
+
+    // ------------------------------------------- 32x32 camera thumbnail window
+    input  wire [10:0] cam_addr,
+    input  wire        cam_bank,
+    output wire [15:0] cam_data,
+    output wire [31:0] cam_frame
 );
 
     // ------------------------------------------------------- clock / reset
@@ -570,6 +576,53 @@ module video_fb_top #(
         cap_pixel_s2  <= cap_pixel_s1;
     end
 
+    // ------------------------------------------------------ camera thumbnail
+    wire        cam_wr_en, cam_wr_bank, cam_tog;
+    wire [10:0] cam_wr_addr;
+    wire [15:0] cam_wr_data;
+
+    cam_cap u_cam_cap (
+        .pixel_clk    (pixel_clk_io),
+        .pixel_rst    (pixel_rst),
+        .pixel_de     (pixel_de),
+        .pixel_rgb565 (pixel_rgb565),
+        .pixel_vsync  (pixel_vsync),
+        .wr_en        (cam_wr_en),
+        .wr_addr      (cam_wr_addr),
+        .wr_bank      (cam_wr_bank),
+        .wr_data      (cam_wr_data),
+        .frame_tog    (cam_tog)
+    );
+
+    cam_buf u_cam_buf (
+        .wr_clk  (pixel_clk_io),
+        .wr_en   (cam_wr_en),
+        .wr_addr (cam_wr_addr),
+        .wr_bank (cam_wr_bank),
+        .wr_data (cam_wr_data),
+        .rd_clk  (clk_27m),
+        .rd_addr (cam_addr),
+        .rd_bank (cam_bank),
+        .rd_data (cam_data)
+    );
+
+    // Completed-frame counter on the SoC clock (toggle synchroniser).
+    reg [2:0]  cam_tog_sync;
+    reg [31:0] cam_frame_q;
+
+    always @(posedge clk_27m or negedge rst_n) begin
+        if (!rst_n) begin
+            cam_tog_sync <= 3'd0;
+            cam_frame_q  <= 32'd0;
+        end else begin
+            cam_tog_sync <= {cam_tog_sync[1:0], cam_tog};
+            if (cam_tog_sync[2] ^ cam_tog_sync[1])
+                cam_frame_q <= cam_frame_q + 32'd1;
+        end
+    end
+
+    assign cam_frame = cam_frame_q;
+
     video_fb_status u_status (
         .clk_27m        (clk_27m),
         .rst_sys        (rst_sys),
@@ -637,6 +690,10 @@ module video_fb_top #(
         .gpio_in         (32'd0),
         .gpio_out        (),
         .gpio_dir        (),
+        .cam_addr        (cam_addr),
+        .cam_bank        (cam_bank),
+        .cam_data        (cam_data),
+        .cam_frame       (cam_frame),
         .mt_irq          (),
         .dbg_halt        (soc_dbg_halt),
         .dbg_pc          (soc_dbg_pc),

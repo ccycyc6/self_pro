@@ -22,17 +22,32 @@ module ares_mmio_bus (
   input  logic        uart_rx,
   input  logic [31:0] gpio_in,
   output logic [31:0] gpio_out,
-  output logic [31:0] gpio_dir
+  output logic [31:0] gpio_dir,
+
+  // Camera thumbnail window (B7): 0xD000_2000 + i*4 reads pixel i,
+  // 0xD000_3000 reads the completed-frame counter.
+  output logic [10:0] cam_addr,
+  output logic        cam_bank,
+  input  logic [15:0] cam_data,
+  input  logic [31:0] cam_frame
 );
   import ares_pkg::*;
 
-  typedef enum logic [1:0] {M_IDLE, M_RESP} state_t;
+  typedef enum logic [1:0] {M_IDLE, M_RESP, M_CAM} state_t;
   state_t state_q;
   logic [31:0] rsp_data_q;
 
-  wire sel_clint = (req_addr[31:16] == 16'h0001);
-  wire sel_uart  = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h0);
-  wire sel_gpio  = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h1);
+  wire sel_clint  = (req_addr[31:16] == 16'h0001);
+  wire sel_uart   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h0);
+  wire sel_gpio   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h1);
+  wire sel_cam    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h2);
+  wire sel_camctl = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h3);
+
+  // The camera thumbnail lives in a block RAM on the SoC clock, so its read
+  // takes one cycle: M_CAM is that extra cycle.
+  logic [10:0] cam_addr_q;
+  assign cam_addr = cam_addr_q;
+  assign cam_bank = ~cam_frame[0];   // the frame that just finished
   wire periph_req = (state_q == M_IDLE) && req_valid;
 
   assign req_ready = (state_q == M_IDLE);
@@ -80,12 +95,22 @@ module ares_mmio_bus (
       case (state_q)
         M_IDLE: begin
           if (req_valid && req_ready) begin
-            if (sel_clint) rsp_data_q <= clint_rdata;
-            else if (sel_uart) rsp_data_q <= uart_rdata;
-            else if (sel_gpio) rsp_data_q <= gpio_rdata;
-            else rsp_data_q <= 32'd0;
-            state_q <= M_RESP;
+            if (sel_cam && !req_write) begin
+              cam_addr_q <= req_addr[11:2];
+              state_q <= M_CAM;
+            end else begin
+              if (sel_clint) rsp_data_q <= clint_rdata;
+              else if (sel_uart) rsp_data_q <= uart_rdata;
+              else if (sel_gpio) rsp_data_q <= gpio_rdata;
+              else if (sel_camctl) rsp_data_q <= cam_frame;
+              else rsp_data_q <= 32'd0;
+              state_q <= M_RESP;
+            end
           end
+        end
+        M_CAM: begin
+          rsp_data_q <= {16'd0, cam_data};
+          state_q <= M_RESP;
         end
         M_RESP: if (rsp_ready) state_q <= M_IDLE;
         default: state_q <= M_IDLE;

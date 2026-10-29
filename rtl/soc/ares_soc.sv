@@ -20,6 +20,12 @@ module ares_soc #(
   output logic [31:0] gpio_out,
   output logic [31:0] gpio_dir,
 
+  // Camera thumbnail window (B7)
+  output logic [10:0] cam_addr,
+  output logic        cam_bank,
+  input  logic [15:0] cam_data,
+  input  logic [31:0] cam_frame,
+
   output logic        mt_irq,
   output logic        dbg_halt,
   output logic [31:0] dbg_pc,
@@ -116,6 +122,7 @@ module ares_soc #(
     .req_addr(mmio_req_addr), .req_wdata(mmio_req_wdata), .req_wstrb(mmio_req_wstrb),
     .rsp_valid(mmio_rsp_valid), .rsp_ready(mmio_rsp_ready), .rsp_rdata(mmio_rsp_rdata),
     .timer_irq(irq_timer), .soft_irq(irq_soft),
-    .uart_tx, .uart_rx, .gpio_in, .gpio_out, .gpio_dir
+    .uart_tx, .uart_rx, .gpio_in, .gpio_out, .gpio_dir,
+    .cam_addr, .cam_bank, .cam_data, .cam_frame
   );
 endmodule
