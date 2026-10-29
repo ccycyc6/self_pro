@@ -17,6 +17,10 @@
 #define CAM_PIX_BASE 0xD0002000u
 #define CAM_FRAME    0xD0003000u
 
+#ifdef CAM_DEBUG
+static volatile uint32_t cam_raw[4];
+#endif
+
 #define DET_WT_OFF_L1   0x0000u
 #define DET_WT_OFF_L2   0x0120u
 #define DET_WT_OFF_L3   0x05A0u
@@ -44,7 +48,15 @@ static uint32_t cam_grab(uint8_t *dst)
         uint32_t i;
 
         for (i = 0; i < 1024u; i++) {
-            uint32_t p = ARES_MMIO32(CAM_PIX_BASE + i * 4u) & 0xFFFFu;
+            /* The window is a block RAM behind a one-cycle MMIO state, so the
+             * first read of an address can return the previous address's data.
+             * Read twice and keep the second value. */
+            (void)ARES_MMIO32(CAM_PIX_BASE + i * 4u);
+            uint32_t p = ARES_MMIO32(CAM_PIX_BASE + i * 4u);
+#ifdef CAM_DEBUG
+            if (i < 4u) cam_raw[i] = p;
+#endif
+            p &= 0xFFFFu;
             uint32_t r = ((p >> 11) & 0x1Fu) << 3;
             uint32_t g = ((p >> 5) & 0x3Fu) << 2;
             uint32_t b = (p & 0x1Fu) << 3;
@@ -135,6 +147,9 @@ int yolo_camera_run(void)
             }
             printf("  cam stat min=%u max=%u mean=%u\n",
                    (unsigned)mn, (unsigned)mx, (unsigned)(sm / 1024u));
+            printf("  raw rgb565: %04x %04x %04x %04x\n",
+                   (unsigned)cam_raw[0], (unsigned)cam_raw[1],
+                   (unsigned)cam_raw[2], (unsigned)cam_raw[3]);
 
             for (by = 0; by < 8; by++) {
                 char line[9];
