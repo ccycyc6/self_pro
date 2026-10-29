@@ -9,14 +9,19 @@
   freshly started firmware say for a few seconds after the transfer.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File tools\upload.ps1 -Port COM9 -File build\fw\b4_hello.bin
+  powershell -ExecutionPolicy Bypass -File tools\upload.ps1 -Port COM9 -File build\fw\cam_board.bin -Follow
+
+  -Follow keeps the port open and streams the firmware output until Ctrl+C,
+  which is what you want for the camera demo (it runs forever).
 #>
 param(
     [string]$Port = "COM5",
     [Parameter(Mandatory = $true)][string]$File,
     [int]$Baud = 115200,
     # 58 KB takes ~5 s to shift out at 115200; leave room for the loader reply.
-    [int]$ListenSeconds = 15
+    [int]$ListenSeconds = 15,
+    # Keep reading after the upload until Ctrl+C (the firmware runs forever).
+    [switch]$Follow
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,8 +79,23 @@ $sp.BaseStream.Flush()
 
 # Transmission itself takes payload/11520 seconds; then the loader prints and
 # jumps, and the new firmware prints.  Listen long enough to catch all of it.
-$deadline = (Get-Date).AddSeconds($ListenSeconds)
 $text = ""
+if ($Follow) {
+    # Live view: stream everything until the user presses Ctrl+C.
+    Write-Host "upload: following (Ctrl+C to stop)"
+    try {
+        while ($true) {
+            $chunk = $sp.ReadExisting()
+            if ($chunk.Length -gt 0) { Write-Host -NoNewline $chunk }
+            Start-Sleep -Milliseconds 20
+        }
+    } finally {
+        $sp.Close()
+    }
+    return
+}
+
+$deadline = (Get-Date).AddSeconds($ListenSeconds)
 while ((Get-Date) -lt $deadline) {
     try { $text += $sp.ReadExisting() } catch { }
     Start-Sleep -Milliseconds 50

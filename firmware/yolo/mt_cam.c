@@ -27,8 +27,10 @@
 #define CAM_DBG      0xD0003008u
 #define OSD_BOX_BASE 0xD0004000u     /* x0, y0, x1, y1, commit */
 
-/* Run the accelerator once every this many frames. */
-#define DET_EVERY 10
+/* Run the accelerator once every this many frames.  Each run costs ~268 ms,
+ * so this is the knob between "smooth green box" and "frequent detector
+ * output": 3 gives roughly 11 box updates/s and a detector line every 0.27 s. */
+#define DET_EVERY 3
 
 /* Crop the thumbnail below this block average (relative to the frame mean)
  * counts as "nothing bright in view". */
