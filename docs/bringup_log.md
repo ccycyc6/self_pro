@@ -18,7 +18,7 @@
 | B5 | 张量上板 | ✅ PASS | 2026-10-29 | `5D52CA26…` | 40/415 | +17.1 ns | 板上 golden diff 0 bytes，7468368 cycles |
 | B6-pre | 摄像头→DDR3→HDMI 独立位流 | ✅ PASS | 2026-10-28 | `F5D0EED6…` | 9/415 | 0 failing | 画面干净 |
 | B6 | 并入视频（+SoC） | ✅ PASS | 2026-10-29 | `73485295…` | 49/415 | hold −0.07 | 画面 + golden 0 同时成立 |
-| B7 | 摄像头 + OSD | ☐ | | | | | |
+| B7a | 摄像头 → SoC（无 OSD） | 🔶 位流就绪 | 2026-10-29 | `3AD6DA11…` | 50/415 | hold −0.07 | 待上板 |
 
 ---
 
@@ -229,7 +229,25 @@ SYS P=1 D=1 H=1 C=1
 
 ---
 
-## B7 — 摄像头 + OSD
+## B7a — 摄像头进 SoC（先不画框）
+
+- **日期**：2026-10-29   **提交**：`227cb0d`   **tag**：待上板
+- **位流**：`build/pango/b7/generate_bitstream/video_fb_top.sbit`（9,188,552 B）
+- **sha256**：`3AD6DA11FBB4A1CCD5890993C076FFC38A972F3A840F0C61ED5C2BC733ACF88C`
+- **资源**：LUT 25,297/159,800 (15.83%)，REG 14,286，**DRM 50/415**
+- **固件**：`build/fw/cam_board.bin`（64,632 B，`tools/build_cam_board.sh`）
+- **新增**：`cam_cap` 640×640 中心裁剪 + 20:1 抽取 → 32×32；`cam_buf` 真双时钟
+  BRAM；MMIO `0xD000_2000 + i*4` 像素、`0xD000_3000` 帧计数
+- **现象**：⏳ 待烧写
+
+```text
+camera detector ready, watching the 32x32 thumbnail
+cam f=137 cell=(5,3) box=(420,100)-(440,120) t=268000
+```
+
+---
+
+## B7b — 摄像头 + OSD 框
 
 - **日期**：   **提交**：   **tag**：`board-b7`
 - **现象**：
