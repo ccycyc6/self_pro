@@ -233,7 +233,9 @@ SYS P=1 D=1 H=1 C=1
 
 - **日期**：2026-10-29   **提交**：`227cb0d`   **tag**：待上板
 - **位流**：`build/pango/b7/generate_bitstream/video_fb_top.sbit`（9,188,552 B）
-- **sha256**：`3AD6DA11FBB4A1CCD5890993C076FFC38A972F3A840F0C61ED5C2BC733ACF88C`
+- **sha256**：`25A6ACAFF5607C64EC3689785D1400B03D4D0C93B4D9970ABEAE02E86D09F52B`
+  （第一版 `3AD6DA11…` 用真双端口 RAM，PDS 没推断出来，读回全 0；
+  改成异步 FIFO + 单时钟 RAM，并修了 MMIO 读差一拍）
 - **资源**：LUT 25,297/159,800 (15.83%)，REG 14,286，**DRM 50/415**
 - **固件**：`build/fw/cam_board.bin`（64,632 B，`tools/build_cam_board.sh`）
 - **新增**：`cam_cap` 640×640 中心裁剪 + 20:1 抽取 → 32×32；`cam_buf` 真双时钟
