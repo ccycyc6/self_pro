@@ -2,12 +2,16 @@
 // ---------------------------------------------------------------------------
 // cam_cap - 32x32 thumbnail of the camera picture.
 //
-// Crop: x in [320,960), y in [40,680) of the 1280x720 stream, then decimate
-// 20:1 on both axes, so each cell is exactly 20x20 display pixels.
+// Line structure is taken from the rising edge of pixel_de (start of an active
+// line) rather than from blanking, so it does not depend on how long the
+// blanking interval happens to be:
+//   * pixel index resets at every de rising edge
+//   * line index increments at every de rising edge, resets at vsync
+// Sampling: x in [320,960), y in [40,680), every 20th pixel and every 20th
+// line, which makes each cell exactly 20x20 display pixels.
 //
 // Output word {bank, addr[10:0], rgb565[15:0]} goes into a small asynchronous
-// FIFO (cam_fifo) because PDS would not infer a true dual-port RAM for the
-// pixel-clock / SoC-clock boundary.
+// FIFO (PDS would not infer a true dual-port RAM for the pixel/SoC boundary).
 // ---------------------------------------------------------------------------
 module cam_cap (
     input  wire        pixel_clk,
@@ -19,95 +23,99 @@ module cam_cap (
     output reg         wr_en,
     output reg  [27:0] wr_data,
     output reg         frame_tog,
-    output reg  [31:0] wr_cnt
+    output reg  [31:0] wr_cnt,
+    output reg  [23:0] dbg           // {line[11:0], pixel[11:0]}
 );
-    localparam integer X0 = 320;
-    localparam integer Y0 = 40;
-
-    reg [10:0] x_cnt;
-    reg [9:0]  y_cnt;
-    reg [4:0]  gx, gy;
-    reg [4:0]  xph, yph;
+    reg        de_d;
+    reg [11:0] pix;
+    reg [11:0] ln;
+    reg [4:0]  cnt20;        // pixel phase inside a cell
+    reg [4:0]  l20;          // line phase inside a cell
+    reg        line_ok;      // this line contributes a row of cells
+    reg [4:0]  gx, gy, gy_cur;
     reg        vsync_d;
     reg        wr_bank;
 
-    wire in_x = (x_cnt >= X0) && (x_cnt < X0 + 640);
-    wire in_y = (y_cnt >= Y0) && (y_cnt < Y0 + 640);
-    wire sample = pixel_de && in_x && in_y && (xph == 5'd0) && (yph == 5'd0);
+    wire de_rise = pixel_de && !de_d;
+    wire in_x    = (pix >= 12'd320) && (pix < 12'd960);
 
     always @(posedge pixel_clk) begin
         if (pixel_rst) begin
-            x_cnt <= 11'd0;
-            y_cnt <= 10'd0;
-            gx    <= 5'd0;
-            gy    <= 5'd0;
-            xph   <= 5'd0;
-            yph   <= 5'd0;
+            de_d   <= 1'b0;
+            pix    <= 12'd0;
+            ln     <= 12'd0;
+            cnt20  <= 5'd0;
+            l20    <= 5'd0;
+            line_ok <= 1'b0;
+            gx     <= 5'd0;
+            gy     <= 5'd0;
+            gy_cur <= 5'd0;
             vsync_d <= 1'b0;
-            wr_en <= 1'b0;
-            wr_data <= 28'd0;
             wr_bank <= 1'b0;
+            wr_en  <= 1'b0;
+            wr_data <= 28'd0;
             frame_tog <= 1'b0;
             wr_cnt <= 32'd0;
+            dbg    <= 24'd0;
         end else begin
+            de_d  <= pixel_de;
             wr_en <= 1'b0;
+            dbg   <= {ln[11:0], pix[11:0]};
 
-            if (pixel_de) begin
-                if (sample) begin
-                    wr_en   <= 1'b1;
-                    wr_data <= {wr_bank, gy[4:0], gx[4:0], pixel_rgb565};
-                    wr_cnt  <= wr_cnt + 32'd1;
+            // ------------------------------------------------ start of line
+            if (de_rise) begin
+                pix  <= 12'd0;
+                gx   <= 5'd0;
+                cnt20 <= 5'd0;
+
+                if (ln == 12'd719) ln <= 12'd0;
+                else               ln <= ln + 12'd1;
+
+                if ((ln >= 12'd40) && (ln < 12'd680) && (l20 == 5'd0)) begin
+                    line_ok <= 1'b1;
+                    gy_cur  <= gy;
+                    if (gy == 5'd31) gy <= 5'd0;
+                    else             gy <= gy + 5'd1;
+                end else begin
+                    line_ok <= 1'b0;
                 end
+
+                if ((ln >= 12'd40) && (ln < 12'd680)) begin
+                    if (l20 == 5'd19) l20 <= 5'd0;
+                    else              l20 <= l20 + 5'd1;
+                end else begin
+                    l20 <= 5'd0;
+                end
+            end else if (pixel_de) begin
+                // -------------------------------------------- one pixel in
+                pix <= pix + 12'd1;
 
                 if (in_x) begin
-                    if (xph == 5'd19) begin
-                        xph <= 5'd0;
-                        if (gx == 5'd31) gx <= 5'd0;
-                        else             gx <= gx + 5'd1;
+                    if (cnt20 == 5'd0) begin
+                        cnt20  <= 5'd19;
+                        if (line_ok) begin
+                            wr_en   <= 1'b1;
+                            wr_data <= {wr_bank, gy_cur, gx, pixel_rgb565};
+                            wr_cnt  <= wr_cnt + 32'd1;
+                            if (gx == 5'd31) gx <= 5'd0;
+                            else             gx <= gx + 5'd1;
+                        end
                     end else begin
-                        xph <= xph + 5'd1;
+                        cnt20 <= cnt20 - 5'd1;
                     end
                 end else begin
-                    xph <= 5'd0;
-                    gx  <= 5'd0;
-                end
-
-                if (x_cnt == 11'd1279) x_cnt <= 11'd0;
-                else                   x_cnt <= x_cnt + 11'd1;
-            end
-
-            // End of an active line.
-            if (!pixel_de && (x_cnt != 11'd0)) begin
-                x_cnt <= 11'd0;
-                if (y_cnt == 10'd719) y_cnt <= 10'd0;
-                else                  y_cnt <= y_cnt + 10'd1;
-
-                if (in_y) begin
-                    if (yph == 5'd19) begin
-                        yph <= 5'd0;
-                        if (gy == 5'd31) gy <= 5'd0;
-                        else             gy <= gy + 5'd1;
-                    end else begin
-                        yph <= yph + 5'd1;
-                    end
-                end else begin
-                    yph <= 5'd0;
-                    gy  <= 5'd0;
+                    cnt20 <= 5'd0;
                 end
             end
 
-            // Frame boundaries.
+            // ------------------------------------------------------ frame end
             vsync_d <= pixel_vsync;
-            if (pixel_vsync) begin
-                x_cnt <= 11'd0;
-                y_cnt <= 10'd0;
-                gx    <= 5'd0;
-                gy    <= 5'd0;
-                xph   <= 5'd0;
-                yph   <= 5'd0;
-            end
             if (pixel_vsync && !vsync_d) begin
-                wr_bank   <= ~wr_bank;
+                ln       <= 12'd0;
+                l20      <= 5'd0;
+                gy       <= 5'd0;
+                line_ok  <= 1'b0;
+                wr_bank  <= ~wr_bank;
                 frame_tog <= ~frame_tog;
             end
         end

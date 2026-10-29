@@ -11,6 +11,7 @@ module tb_soc;
   logic [15:0] cam_data = 16'd0;
   logic [31:0] cam_frame = 32'd0;
   logic [31:0] cam_wrcnt = 32'd0;
+  logic [23:0] cam_dbg = 24'd0;
   logic [31:0] dbg_pc, dbg_pc_f;
   logic dbg_ifid_valid, dbg_idex_valid, dbg_exmem_valid, dbg_memwb_valid, dbg_if_pending;
 
@@ -21,7 +22,7 @@ module tb_soc;
     .clk, .rst,
     .uart_rx, .uart_tx,
     .gpio_in, .gpio_out, .gpio_dir,
-    .cam_addr, .cam_bank, .cam_data, .cam_frame, .cam_wrcnt,
+    .cam_addr, .cam_bank, .cam_data, .cam_frame, .cam_wrcnt, .cam_dbg,
     .mt_irq, .dbg_halt, .dbg_pc, .dbg_commit,
     .dbg_pc_f, .dbg_ifid_valid, .dbg_idex_valid, .dbg_exmem_valid,
     .dbg_memwb_valid, .dbg_if_pending

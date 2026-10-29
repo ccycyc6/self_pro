@@ -576,6 +576,7 @@ module video_fb_top #(
     wire        cam_wr_en, cam_tog;
     wire [27:0] cam_wr_word;
     wire [31:0] cam_wr_cnt;
+    wire [23:0] cam_dbg_pix;
     wire [10:0] cam_rd_addr;
     wire        cam_rd_bank;
     wire [15:0] cam_rd_data;
@@ -592,7 +593,8 @@ module video_fb_top #(
         .wr_en        (cam_wr_en),
         .wr_data      (cam_wr_word),
         .frame_tog    (cam_tog),
-        .wr_cnt       (cam_wr_cnt)
+        .wr_cnt       (cam_wr_cnt),
+        .dbg          (cam_dbg_pix)
     );
 
     cam_fifo #(
@@ -642,13 +644,18 @@ module video_fb_top #(
 
     // Debug: how many samples the capture has written (2FF, count only).
     reg [31:0] cam_wrcnt_s1, cam_wrcnt_s2;
+    reg [23:0] cam_dbg_s1, cam_dbg_s2;
     always @(posedge clk_27m) begin
         if (rst_sys) begin
             cam_wrcnt_s1 <= 32'd0;
             cam_wrcnt_s2 <= 32'd0;
+            cam_dbg_s1   <= 24'd0;
+            cam_dbg_s2   <= 24'd0;
         end else begin
             cam_wrcnt_s1 <= cam_wr_cnt;
             cam_wrcnt_s2 <= cam_wrcnt_s1;
+            cam_dbg_s1   <= cam_dbg_pix;
+            cam_dbg_s2   <= cam_dbg_s1;
         end
     end
 
@@ -724,6 +731,7 @@ module video_fb_top #(
         .cam_data        (cam_rd_data),
         .cam_frame       (cam_frame_w),
         .cam_wrcnt       (cam_wrcnt_s2),
+        .cam_dbg         (cam_dbg_s2),
         .mt_irq          (),
         .dbg_halt        (soc_dbg_halt),
         .dbg_pc          (soc_dbg_pc),

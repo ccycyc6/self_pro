@@ -17,6 +17,7 @@
 #define CAM_PIX_BASE 0xD0002000u
 #define CAM_FRAME    0xD0003000u
 #define CAM_WRCNT    0xD0003004u
+#define CAM_DBG      0xD0003008u
 
 #ifdef CAM_DEBUG
 static volatile uint32_t cam_raw[4];
@@ -148,7 +149,12 @@ int yolo_camera_run(void)
             }
             printf("  cam stat min=%u max=%u mean=%u\n",
                    (unsigned)mn, (unsigned)mx, (unsigned)(sm / 1024u));
-            printf("  cam wrcnt=%u\n", (unsigned)ARES_MMIO32(CAM_WRCNT));
+            {
+                uint32_t d = ARES_MMIO32(CAM_DBG);
+                printf("  cam wrcnt=%u line=%u pix=%u\n",
+                       (unsigned)ARES_MMIO32(CAM_WRCNT),
+                       (unsigned)(d >> 12), (unsigned)(d & 0xFFFu));
+            }
             printf("  raw rgb565: %04x %04x %04x %04x\n",
                    (unsigned)cam_raw[0], (unsigned)cam_raw[1],
                    (unsigned)cam_raw[2], (unsigned)cam_raw[3]);

@@ -79,6 +79,7 @@ module board_cpu #(
         .cam_data        (16'd0),
         .cam_frame       (32'd0),
         .cam_wrcnt       (32'd0),
+        .cam_dbg         (24'd0),
         .mt_irq          (),
         .dbg_halt        (dbg_halt),
         .dbg_pc          (dbg_pc),

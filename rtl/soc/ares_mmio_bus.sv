@@ -30,7 +30,8 @@ module ares_mmio_bus (
   output logic        cam_bank,
   input  logic [15:0] cam_data,
   input  logic [31:0] cam_frame,
-  input  logic [31:0] cam_wrcnt
+  input  logic [31:0] cam_wrcnt,
+  input  logic [23:0] cam_dbg
 );
   import ares_pkg::*;
 
@@ -103,7 +104,14 @@ module ares_mmio_bus (
               if (sel_clint) rsp_data_q <= clint_rdata;
               else if (sel_uart) rsp_data_q <= uart_rdata;
               else if (sel_gpio) rsp_data_q <= gpio_rdata;
-              else if (sel_camctl) rsp_data_q <= req_addr[2] ? cam_wrcnt : cam_frame;
+              else if (sel_camctl) begin
+                case (req_addr[3:2])
+                  2'd0: rsp_data_q <= cam_frame;
+                  2'd1: rsp_data_q <= cam_wrcnt;
+                  2'd2: rsp_data_q <= {8'd0, cam_dbg};
+                  default: rsp_data_q <= 32'd0;
+                endcase
+              end
               else rsp_data_q <= 32'd0;
               state_q <= M_RESP;
             end
