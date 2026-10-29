@@ -13,6 +13,8 @@ VERILATOR    ?= verilator
 
 DET_IMG_COUNT ?= 1
 UART_DIV      ?= 8
+# Extra -D flags for the firmware, e.g. make yolo EXTRA_DEFS=-DMT_PROF
+EXTRA_DEFS    ?=
 
 ARCH   := -march=rv32im_zicsr_zifencei -mabi=ilp32
 CFLAGS := $(ARCH) -O2 -ffreestanding -fno-builtin -nostdlib -nostartfiles \
@@ -75,6 +77,7 @@ yolo: sim
 	mkdir -p build/yolo
 	for f in $(YOLO_SRC); do \
 	  $(CC) $(CFLAGS) -Ifirmware/yolo -DDET_IMG_COUNT=$(DET_IMG_COUNT) \
+	    $(EXTRA_DEFS) \
 	    -c $$f -o build/yolo/$$(basename $$f).o; \
 	done
 	$(CC) $(LDFLAGS) build/yolo/*.o -lgcc -o build/yolo/yolo.elf

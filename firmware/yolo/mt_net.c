@@ -67,6 +67,13 @@ void net_pad(const net_layer_t *L)
     }
 }
 
+#ifdef MT_PROF
+/* Phase timers, compiled out by default. */
+uint32_t prof_wt, prof_gemm, prof_epi, prof_tile;
+#define PROF_NOW() mt_rd_mcycle()
+#define PROF_ACC(v, t0) do { v += mt_rd_mcycle() - (t0); (t0) = mt_rd_mcycle(); } while (0)
+#endif
+
 int net_conv(const net_layer_t *L, uint32_t *cmds)
 {
     uint32_t ng = L->c_in / 4u, nm = L->c_out / 4u;
@@ -90,7 +97,7 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
      * by one, the C row by a whole tile column.  Written once per layer. */
     /* A row stays put for the whole run (it is the activation row for this
      * tile column); only the weight row and the C row advance. */
-    MT_MMIO32(MT_BSTEP) = 0u | (1u << 8) | ((ntiles4 & 0xFFu) << 16);
+    MT_SET_STEPS(0u, 1u, ntiles4);
 
     if ((rc = mt_push(MT_LOAD, B + L->cfg_off,
                       MT_ROWS(UB_CFG, L->leaky ? 2u : 1u))) != 0) return rc;
@@ -126,6 +133,9 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
         {
             uint32_t hrow = ho * ntiles;
 
+#ifdef MT_PROF
+            uint32_t prof_t0 = PROF_NOW();
+#endif
             for (tc = 0; tc < ntap; tc += na)
             {
                 nq = (ntap - tc) < na ? (ntap - tc) : na;
@@ -142,6 +152,9 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                     count++;
                 }
 
+#ifdef MT_PROF
+                PROF_ACC(prof_wt, prof_t0);
+#endif
                 /* q (the tap) is the outer loop on purpose: decoding a tap
                  * index into (g, ky, kx) costs two divisions, and with t on
                  * the outside that decode ran once per (tap, tile) pair --
@@ -192,6 +205,9 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                 }
             }
 
+#ifdef MT_PROF
+                PROF_ACC(prof_gemm, prof_t0);
+#endif
         /* The epilogue runs once the whole row's GEMMs are queued.  It stays
          * inside the ho loop: UB_OUT holds one output row. */
         for (j = 0; j < njt; j++)

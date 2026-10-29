@@ -59,9 +59,17 @@ static inline uint32_t mt_enc(uint32_t funct7, uint32_t funct3, uint32_t rd)
 #define MT_VEC_RELU8 mt_enc(0x02u, 0x2u, 0u)   /* 0000010 funct3=010      */
 #define MT_GEMM      mt_enc(0x05u, 0x0u, 0u)   /* 0000101: 4x4x4 INT8     */
 
-/* GEMM burst: the rd field carries how many GEMMs the shim should issue from
- * one push, adding MT_BSTEP between them.  rd is otherwise unused. */
-#define MT_GEMM_BURST(n) mt_enc(0x05u, 0x0u, (n))
+/* Burst form of any instruction: the rd field tells the shim how many times to
+ * issue it, adding MT_BSTEP between issues.  rd is otherwise unused. */
+#define MT_BURST(instr, n) ((instr) | ((((uint32_t)(n)) & 0x1Fu) << 7))
+#define MT_GEMM_BURST(n)   MT_BURST(MT_GEMM, (n))
+
+/* Row steps for the next burst: a and b live in rs1's two bytes, c in rs2's
+ * low byte. */
+#define MT_SET_STEPS(a, b, c) \
+    MT_MMIO32(MT_BSTEP) = ((uint32_t)(a) & 0xFFu) | \
+                          (((uint32_t)(b) & 0xFFu) << 8) | \
+                          (((uint32_t)(c) & 0xFFu) << 16)
 #define MT_EPILOGUE  mt_enc(0x06u, 0x0u, 0u)   /* 0000110: requant+pack   */
 
 /* rs2 for MT_LOAD / MT_STORE: [7:0] UB start row, [15:8] row count (never 0). */

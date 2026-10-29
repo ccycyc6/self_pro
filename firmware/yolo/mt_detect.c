@@ -219,6 +219,10 @@ int mt_detect_command(int argc, char **argv)
         unsigned busy      = (unsigned)(ARES_MMIO32(0xE000001Cu) - perf_busy0);
         unsigned total     = (unsigned)(end - start);
         /* Where the frame time actually goes, per 1,000 commands. */
+#ifdef MT_PROF
+        printf("phase: weights=%u gemm=%u\n",
+               (unsigned)prof_wt, (unsigned)prof_gemm);
+#endif
         printf("perf: total=%u busy=%u dma=%u busy_pct=%u cmd=%u per_cmd=%u\n",
                total, busy, dma_stall,
                total ? (unsigned)(busy * 100u / total) : 0u,
