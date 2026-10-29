@@ -9,7 +9,7 @@ module cam_store (
     input  wire        rst,
 
     // FIFO side (clk_27m)
-    input  wire [26:0] fifo_data,
+    input  wire [27:0] fifo_data,   // {bank, addr[10:0], rgb565[15:0]}
     input  wire        fifo_empty,
     output wire        fifo_rd_en,
 
