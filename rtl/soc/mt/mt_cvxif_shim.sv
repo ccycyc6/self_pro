@@ -59,7 +59,15 @@ module mt_cvxif_shim #(
   localparam logic [2:0] IDX_RS1   = 3'd1;
   localparam logic [2:0] IDX_RS2   = 3'd2;
   localparam logic [2:0] IDX_KICK  = 3'd3;
+  localparam logic [2:0] IDX_BSTEP = 3'd6;   // burst row steps, write-only
   // 3'd4 = MT_STATUS and 3'd5 = MT_RESULT are read-only.
+
+  // A command may carry a repeat count in the instruction's rd field: the shim
+  // then issues count GEMMs back to back, adding the staged row steps between
+  // them.  That turns the driver's inner loop (three commands per output group)
+  // into one push.
+  localparam logic [31:0] FUNCT7_GEMM = 32'h05;
+  localparam logic [4:0]  REP_MAX     = 5'd16;
 
   typedef enum logic [2:0] {
     S_IDLE,
@@ -82,16 +90,35 @@ module mt_cvxif_shim #(
   logic [3:0]  id_q;
   logic [7:0]  wait_q;
 
+  // Burst support: row steps staged per layer, repeat counter per command.
+  logic [7:0]  stg_a_step, stg_b_step, stg_c_step;   // written via IDX_BSTEP
+  logic [7:0]  rep_q;                                // repeats left - 1
+  logic [7:0]  rep_stg;                              // repeats of the next push
+  logic [7:0]  a_step_q, b_step_q, c_step_q;         // latched with the command
+
   logic [31:0] result_data_q;
   logic        done_q, err_q, accept_err_q, kick_err_q;
 
   // ---------------------------------------------------------------------------
   // Command queue (mt_cmd_fifo owns the storage; this module only sequences)
   // ---------------------------------------------------------------------------
-  wire        fifo_full, fifo_empty;
-  wire [31:0] fifo_count;
-  wire [31:0] fifo_head_instr, fifo_head_rs1, fifo_head_rs2;
-  wire        fifo_push, fifo_pop;
+  wire         fifo_full, fifo_empty;
+  wire [31:0]  fifo_count;
+  wire [127:0] fifo_head;
+  wire         fifo_push, fifo_pop;
+  wire [127:0] fifo_push_data;
+
+  // Entry layout, MSB first: {rep, c_step, b_step, a_step, rs2, rs1, instr}
+  wire [31:0] fifo_head_instr = fifo_head[31:0];
+  wire [31:0] fifo_head_rs1   = fifo_head[63:32];
+  wire [31:0] fifo_head_rs2   = fifo_head[95:64];
+  wire [7:0]  fifo_head_a     = fifo_head[103:96];
+  wire [7:0]  fifo_head_b     = fifo_head[111:104];
+  wire [7:0]  fifo_head_c     = fifo_head[119:112];
+  wire [7:0]  fifo_head_rep   = fifo_head[127:120];
+
+  assign fifo_push_data = {rep_stg, stg_c_step, stg_b_step, stg_a_step,
+                           stg_rs2_q, stg_rs1_q, stg_instr_q};
 
   wire kick = reg_wr_en && (reg_wr_idx == IDX_KICK) && reg_wr_data[0];
 
@@ -100,22 +127,24 @@ module mt_cvxif_shim #(
   assign busy      = !fifo_empty || (state_q != S_IDLE);
 
   mt_cmd_fifo #(
-    .DEPTH(FIFO_DEPTH)
+    .DEPTH(FIFO_DEPTH),
+    .WIDTH(128)
   ) u_cmd_fifo (
     .clk,
     .rst,
     .push(fifo_push),
-    .push_instr(stg_instr_q),
-    .push_rs1(stg_rs1_q),
-    .push_rs2(stg_rs2_q),
+    .push_data(fifo_push_data),
     .pop(fifo_pop),
-    .head_instr(fifo_head_instr),
-    .head_rs1(fifo_head_rs1),
-    .head_rs2(fifo_head_rs2),
+    .head_data(fifo_head),
     .empty(fifo_empty),
     .full(fifo_full),
     .count(fifo_count)
   );
+
+  // The rd field of a GEMM instruction carries the repeat count; every other
+  // instruction leaves it zero and is issued once.
+  assign rep_stg = (stg_instr_q[31:25] == FUNCT7_GEMM[6:0]) ? stg_instr_q[11:7]
+                                                          : 8'd0;
 
   assign status      = {27'd0, kick_err_q, accept_err_q, err_q, done_q, busy};
   assign result_data = result_data_q;
@@ -158,12 +187,24 @@ module mt_cvxif_shim #(
       err_q        <= 1'b0;
       accept_err_q <= 1'b0;
       kick_err_q   <= 1'b0;
+      rep_q        <= 8'd0;
+      a_step_q     <= 8'd0;
+      b_step_q     <= 8'd0;
+      c_step_q     <= 8'd0;
+      stg_a_step   <= 8'd0;
+      stg_b_step   <= 8'd0;
+      stg_c_step   <= 8'd0;
     end else begin
       if (reg_wr_en) begin
         case (reg_wr_idx)
           IDX_INSTR: stg_instr_q <= reg_wr_data;
           IDX_RS1:   stg_rs1_q   <= reg_wr_data;
           IDX_RS2:   stg_rs2_q   <= reg_wr_data;
+          IDX_BSTEP: begin
+            stg_a_step <= reg_wr_data[7:0];
+            stg_b_step <= reg_wr_data[15:8];
+            stg_c_step <= reg_wr_data[23:16];
+          end
           default:   ;  // KICK is consumed below
         endcase
       end
@@ -189,11 +230,16 @@ module mt_cvxif_shim #(
       case (state_q)
         S_IDLE: begin
           if (!fifo_empty) begin
-            instr_q <= fifo_head_instr;
-            rs1_q   <= fifo_head_rs1;
-            rs2_q   <= fifo_head_rs2;
-            id_q    <= id_q + 4'd1;
-            state_q <= S_ISSUE;
+            instr_q  <= fifo_head_instr;
+            rs1_q    <= fifo_head_rs1;
+            rs2_q    <= fifo_head_rs2;
+            a_step_q <= fifo_head_a;
+            b_step_q <= fifo_head_b;
+            c_step_q <= fifo_head_c;
+            // rep is the number of issues, rep_q counts the ones still to do.
+            rep_q    <= (fifo_head_rep == 8'd0) ? 8'd0 : (fifo_head_rep - 8'd1);
+            id_q     <= id_q + 4'd1;
+            state_q  <= S_ISSUE;
           end
         end
 
@@ -232,9 +278,19 @@ module mt_cvxif_shim #(
           if (xif_rsp.result_valid && xif_req.result_ready) begin
             err_q         <= err_q | xif_rsp.result_err;
             result_data_q <= xif_rsp.result_data;
-            // Only the final command of a drained queue raises DONE.
-            if (fifo_empty) done_q <= 1'b1;
-            state_q       <= S_IDLE;
+
+            if (rep_q != 8'd0) begin
+              // Burst: issue the same instruction again with the rows moved on.
+              rep_q   <= rep_q - 8'd1;
+              rs1_q   <= rs1_q + {b_step_q, a_step_q};
+              rs2_q   <= rs2_q + {24'd0, c_step_q};
+              id_q    <= id_q + 4'd1;
+              state_q <= S_ISSUE;
+            end else begin
+              // Only the final command of a drained queue raises DONE.
+              if (fifo_empty) done_q <= 1'b1;
+              state_q <= S_IDLE;
+            end
           end
         end
 

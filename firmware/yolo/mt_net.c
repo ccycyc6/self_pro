@@ -86,6 +86,12 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
     int rc;
 
 
+    /* GEMM bursts walk the output groups inside a tile: the A and B rows step
+     * by one, the C row by a whole tile column.  Written once per layer. */
+    /* A row stays put for the whole run (it is the activation row for this
+     * tile column); only the weight row and the C row advance. */
+    MT_MMIO32(MT_BSTEP) = 0u | (1u << 8) | ((ntiles4 & 0xFFu) << 16);
+
     if ((rc = mt_push(MT_LOAD, B + L->cfg_off,
                       MT_ROWS(UB_CFG, L->leaky ? 2u : 1u))) != 0) return rc;
     count++;
@@ -166,21 +172,20 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                         count++;
 
                         for (u = 0; u < n; u++)
-                        for (j = 0; j < njt; j++)
                         {
+                            /* One push covers the whole output-group run: the
+                             * shim repeats the GEMM and adds MT_BSTEP between
+                             * issues.  The first tap of the output overwrites C
+                             * and every later tap accumulates, which depends on
+                             * the tap only. */
                             uint32_t crow0 = UB_C + ((t + u) * 4u);
-                            uint32_t rs1 = MT_GEMM_RS1(UB_A + u, wb + j);
-                            /* The first tap of the whole output overwrites C and
-                             * every later tap accumulates.  This is a property
-                             * of the tap, so it must be recomputed for each
-                             * output group -- hoisting it into one variable
-                             * leaves groups 1..n-1 accumulating onto the
-                             * previous row's values. */
-                            uint32_t rs2 = MT_GEMM_RS2(crow0 + (j * ntiles4),
+                            uint32_t rs1 = MT_GEMM_RS1(UB_A + u, wb);
+                            uint32_t rs2 = MT_GEMM_RS2(crow0,
                                                        (tc == 0u && q == tc)
                                                            ? 0u : 1u);
 
-                            if ((rc = mt_push(MT_GEMM, rs1, rs2)) != 0) return rc;
+                            if ((rc = mt_push(MT_GEMM_BURST(njt), rs1, rs2)) != 0)
+                                return rc;
                             count++;
                         }
                     }

@@ -22,6 +22,7 @@
 #define MT_KICK        (MT_BASE + 0x0Cu)
 #define MT_STATUS      (MT_BASE + 0x10u)
 #define MT_RESULT      (MT_BASE + 0x14u)
+#define MT_BSTEP       (MT_BASE + 0x18u)   /* burst row steps: a|b<<8|c<<16 */
 
 #define MT_MMIO32(address) (*(volatile uint32_t *)(uintptr_t)(address))
 
@@ -57,6 +58,10 @@ static inline uint32_t mt_enc(uint32_t funct7, uint32_t funct3, uint32_t rd)
 #define MT_VEC_MAX8  mt_enc(0x02u, 0x1u, 0u)   /* 0000010 funct3=001      */
 #define MT_VEC_RELU8 mt_enc(0x02u, 0x2u, 0u)   /* 0000010 funct3=010      */
 #define MT_GEMM      mt_enc(0x05u, 0x0u, 0u)   /* 0000101: 4x4x4 INT8     */
+
+/* GEMM burst: the rd field carries how many GEMMs the shim should issue from
+ * one push, adding MT_BSTEP between them.  rd is otherwise unused. */
+#define MT_GEMM_BURST(n) mt_enc(0x05u, 0x0u, (n))
 #define MT_EPILOGUE  mt_enc(0x06u, 0x0u, 0u)   /* 0000110: requant+pack   */
 
 /* rs2 for MT_LOAD / MT_STORE: [7:0] UB start row, [15:8] row count (never 0). */
@@ -109,8 +114,25 @@ static inline uint32_t mt_rd_mcycle(void)
 #endif
 
 /* Queue a command without waiting for it.  Drains automatically every
- * MT_BATCH commands.  Returns 0, or negative on error/timeout. */
-int mt_push(uint32_t instr, uint32_t rs1, uint32_t rs2);
+ * MT_BATCH commands.  Returns 0, or negative on error/timeout.
+ *
+ * Inline on purpose: the convoy loops push tens of thousands of commands and a
+ * real call costs more than the four stores it wraps. */
+extern uint32_t mt_queued;
+
+static inline int mt_push(uint32_t instr, uint32_t rs1, uint32_t rs2)
+{
+    MT_MMIO32(MT_INSTR) = instr;
+    MT_MMIO32(MT_RS1)   = rs1;
+    MT_MMIO32(MT_RS2)   = rs2;
+    MT_MMIO32(MT_KICK)  = 1u;
+
+    if (++mt_queued >= MT_BATCH)
+    {
+        return mt_drain();
+    }
+    return 0;
+}
 
 /* Wait for the queue to drain and report any accumulated error.  Safe to call
  * when nothing is queued. */
