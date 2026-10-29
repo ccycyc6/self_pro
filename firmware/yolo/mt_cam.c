@@ -181,20 +181,22 @@ int yolo_camera_run(void)
         if (sum > 0) {
             int cx = (int)((sx * 10) / sum) / 10;
             int cy = (int)((sy * 10) / sum) / 10;
-            uint32_t x0 = (uint32_t)(320 + cx * 20);
-            uint32_t y0 = (uint32_t)(40 + cy * 20);
+            /* The head produces an 8x8 grid over the 32x32 thumbnail, so one
+             * output cell covers 4x4 thumbnail cells = 80x80 display pixels. */
+            uint32_t x0 = (uint32_t)(320 + cx * 80);
+            uint32_t y0 = (uint32_t)(40 + cy * 80);
 
             printf("cam f=%u cell=(%d,%d) box=(%u,%u)-(%u,%u) t=%u\n",
                    (unsigned)frame, cx, cy,
                    (unsigned)x0, (unsigned)y0,
-                   (unsigned)(x0 + 20u), (unsigned)(y0 + 20u),
+                   (unsigned)(x0 + 80u), (unsigned)(y0 + 80u),
                    (unsigned)(end - start));
 
             /* Publish the box for the OSD overlay. */
             ares_mmio_write(OSD_BOX_BASE + 0u, x0);
             ares_mmio_write(OSD_BOX_BASE + 4u, y0);
-            ares_mmio_write(OSD_BOX_BASE + 8u, x0 + 20u);
-            ares_mmio_write(OSD_BOX_BASE + 12u, y0 + 20u);
+            ares_mmio_write(OSD_BOX_BASE + 8u, x0 + 80u);
+            ares_mmio_write(OSD_BOX_BASE + 12u, y0 + 80u);
             ares_mmio_write(OSD_BOX_BASE + 16u, 1u);
         } else {
             printf("cam f=%u no detection\n", (unsigned)frame);
