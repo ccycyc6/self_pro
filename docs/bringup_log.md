@@ -261,11 +261,20 @@ cam f=384 cell=(4,3) box=(400,100)-(420,120) t=7164510
 
 ## B7b — 摄像头 + OSD 框
 
-- **日期**：   **提交**：   **tag**：`board-b7`
-- **现象**：
+- **日期**：2026-10-30   **提交**：`49b0c78`   **tag**：待上板通过后打 `board-b7b`
+- **位流**：`build/pango/b7b/generate_bitstream/video_fb_top.sbit`（9,188,552 B）
+- **sha256**：`8CE41766CC81F6680C3C47ED0E5A9F3381D37CB8ACF7AE85DACCEDD911CC1E17`
+- **资源**：LUT 25,480/159,800 (15.94%)，REG 14,618，**DRM 50/415**
+- **时序**：setup 全 MET，hold 边角 −0.074 ns（同 B6/B7a，27 MHz 下无影响）
+- **耗时**：28m09s
+- **固件**：`build/fw/cam_board.bin`（64,704 B，含框坐标发布）
+- **新增**：`video_osd.v`（只描边不填充，pixel 域）、MMIO `0xD000_4000` 邮箱 +
+  `0xD000_4010` 提交（toggle 跨时钟）
+- **验证**：HDMI 画面 + 绿框跟随目标 + 串口坐标一致
+- **现象**：⏳ 待烧写
 
 ```text
-cam frame=142 box=(462,190,502,230) t=268ms
+cam f=384 cell=(4,3) box=(400,100)-(420,120) t=268000
 ```
 
 - **结论**：
