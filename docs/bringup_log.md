@@ -259,22 +259,49 @@ cam f=384 cell=(4,3) box=(400,100)-(420,120) t=7164510
 
 ---
 
-## B7b — 摄像头 + OSD 框
+## B7b — 摄像头 + OSD 框（成品）
 
-- **日期**：2026-10-30   **提交**：`49b0c78`   **tag**：待上板通过后打 `board-b7b`
+- **日期**：2026-10-30   **提交**：`48fc119`   **tag**：`board-b7b`
 - **位流**：`build/pango/b7b/generate_bitstream/video_fb_top.sbit`（9,188,552 B）
 - **sha256**：`8CE41766CC81F6680C3C47ED0E5A9F3381D37CB8ACF7AE85DACCEDD911CC1E17`
 - **资源**：LUT 25,480/159,800 (15.94%)，REG 14,618，**DRM 50/415**
 - **时序**：setup 全 MET，hold 边角 −0.074 ns（同 B6/B7a，27 MHz 下无影响）
 - **耗时**：28m09s
-- **固件**：`build/fw/cam_board.bin`（64,704 B，含框坐标发布）
+- **固件**：`firmware/bin/cam_tracker_v1.bin`（64,960 B，已入库）
 - **新增**：`video_osd.v`（只描边不填充，pixel 域）、MMIO `0xD000_4000` 邮箱 +
   `0xD000_4010` 提交（toggle 跨时钟）
 - **验证**：HDMI 画面 + 绿框跟随目标 + 串口坐标一致
-- **现象**：⏳ 待烧写
+- **现象**（用户实测，2026-10-30 01:00）：画面正常，绿框跟随画面最亮区域；串口每帧
+  打印 `bright=(gx,gy) box=(...) luma=块亮度/全帧均值`，每 3 帧一行
+  `net: cell=(...) t=268000`。
 
 ```text
-cam f=384 cell=(4,3) box=(400,100)-(420,120) t=268000
+f=385 bright=(4,3) box=(640,280)-(720,360) luma=186/97
+  net: cell=(4,3) t=268000
 ```
+
+- **结论**：**PASS**。整条链路闭环：OV5640 → DDR3 → HDMI，以及摄像头 → 32×32 抽取 →
+  SoC → 张量 → 坐标 → OSD 画框，全部在真实硬件上跑通。
+
+---
+
+# 交付状态
+
+| 项目 | 位置 / 值 |
+|---|---|
+| 成品位流 | `build/pango/b7b/generate_bitstream/video_fb_top.sbit` |
+| 位流 sha256 | `8CE41766CC81F6680C3C47ED0E5A9F3381D37CB8ACF7AE85DACCEDD911CC1E17` |
+| 成品固件 | `firmware/bin/cam_tracker_v1.bin`（64,960 B） |
+| 固件 sha256 | `C52FFCD4DA2FC5319282C0D5F51E8295DB1340640349F90E89A919DDEA7CAC98` |
+| 演示命令 | `upload.ps1 -Port COM9 -File firmware/bin/cam_tracker_v1.bin -Follow` |
+| 资源 | LUT 25,480/159,800 (15.9%)，REG 14,618，DRM 50/415 |
+| 帧率 | 视频 720p30；推理 268 ms/帧（≈3.7 fps）；绿框 ≈11 次/秒 |
+
+**已知限制**
+
+1. 复位键（C22）会让 DDR3 IP 重新校准，可能黑屏——演示用断电重启。
+2. 时序有 5 条 ~-0.07 ns 的 hold 边角违例（27 MHz 下无影响，换 seed 可收）。
+3. 模型是玩具级（合成白方块训练），只对亮块敏感；绿框由“最亮块跟踪器”驱动，
+   加速器结果同时打印但不上屏。
 
 - **结论**：
