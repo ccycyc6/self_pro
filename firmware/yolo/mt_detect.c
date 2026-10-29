@@ -128,6 +128,22 @@ int mt_detect_command(int argc, char **argv)
 
     uint32_t perf_dma0, perf_busy0;
 
+#ifdef MT_BENCH
+    /* Microbenchmark: how fast is this core on plain integer code?  Building
+     * it in costs about 0.6% of a frame, so it is compiled out by default. */
+    {
+        uint32_t b0 = mt_rd_mcycle(), b1, b2, i, acc = 1;
+        for (i = 0; i < 2000u; i++) acc = acc * 3u + 1u;
+        b1 = mt_rd_mcycle();
+        for (i = 0; i < 500u; i++) MT_MMIO32(MT_KICK) = acc;
+        b2 = mt_rd_mcycle();
+        printf("bench: alu=%u (%u/iter) store=%u (%u/iter) acc=%u\n",
+               (unsigned)(b1 - b0), (unsigned)((b1 - b0) / 2000u),
+               (unsigned)(b2 - b1), (unsigned)((b2 - b1) / 500u),
+               (unsigned)acc);
+    }
+#endif
+
     mt_reset_status();
     /* Profiling counters are free running; take a snapshot and subtract. */
     perf_dma0 = ARES_MMIO32(0xE0000018u);
@@ -202,10 +218,12 @@ int mt_detect_command(int argc, char **argv)
         unsigned dma_stall = (unsigned)(ARES_MMIO32(0xE0000018u) - perf_dma0);
         unsigned busy      = (unsigned)(ARES_MMIO32(0xE000001Cu) - perf_busy0);
         unsigned total     = (unsigned)(end - start);
-        printf("perf: total=%u busy=%u dma_stall=%u busy_pct=%u dma_pct=%u\n",
+        /* Where the frame time actually goes, per 1,000 commands. */
+        printf("perf: total=%u busy=%u dma=%u busy_pct=%u cmd=%u per_cmd=%u\n",
                total, busy, dma_stall,
                total ? (unsigned)(busy * 100u / total) : 0u,
-               total ? (unsigned)(dma_stall * 100u / total) : 0u);
+               (unsigned)(cmds / DET_IMG_COUNT),
+               (unsigned)(total / (cmds / DET_IMG_COUNT)));
     }
     if (images_ok == 0) {
         printf("miniTensor detector FAILED: no detections\n");

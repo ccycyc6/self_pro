@@ -76,6 +76,7 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
     uint32_t PH = H + (2u * L->pad);
     uint32_t ntiles = WP / 4u;
     uint32_t kk = L->k * L->k;
+    uint32_t k  = L->k;
     uint32_t ntap = kk * ng;
     uint32_t ntiles4 = ntiles * 4u;
     uint32_t B = L->base ? L->base : MT_BUF_BASE;
@@ -135,33 +136,40 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                     count++;
                 }
 
-                for (t = 0; t < ntiles; t++)
+                /* q (the tap) is the outer loop on purpose: decoding a tap
+                 * index into (g, ky, kx) costs two divisions, and with t on
+                 * the outside that decode ran once per (tap, tile) pair --
+                 * up to 16x more often than needed.  The command order changes
+                 * but not the set of commands, and every LOAD still precedes
+                 * the GEMMs that consume it. */
+                for (q = tc; q < tc + nq; q++)
                 {
-                    uint32_t crow0 = UB_C + (t * 4u);
+                    uint32_t g   = q / kk;
+                    uint32_t rem = q % kk;
+                    uint32_t ky  = rem / k;
+                    uint32_t kx  = rem % k;
+                    uint32_t qbase = (((((kx * ng) + g) * PH) + ky) * ntiles) + hrow;
+                    uint32_t wb = UB_WT + ((q - tc) * njt);
 
-                    for (q = tc; q < tc + nq; q++)
+                    /* UB_A holds four activation rows and consecutive tiles are
+                     * contiguous in memory, so one DMA brings in four tiles'
+                     * worth of A.  That removes three quarters of the LOADs
+                     * without touching the GEMM sequence. */
+                    for (t = 0; t < ntiles; t += 4u)
                     {
-                        /* Tap q enumerates as g*kk + ky*k + kx -- the order the
-                         * packer writes rows in, which is what makes a chunk's
-                         * weight rows contiguous.  The bases are computed
-                         * inline rather than tabulated: a table capped the
-                         * input at 64 channels, and tiny-yolov3's deeper layers
-                         * are far wider (128, 256, 512). */
-                        uint32_t g   = q / kk;
-                        uint32_t rem = q % kk;
-                        uint32_t ky  = rem / L->k;
-                        uint32_t kx  = rem % L->k;
-                        uint32_t a_addr = L->pad_off + 16u *
-                            ((((((kx * ng) + g) * PH) + ky) * ntiles) + hrow + t);
-                        uint32_t wb = UB_WT + ((q - tc) * njt);
+                        uint32_t n = ((ntiles - t) < 4u) ? (ntiles - t) : 4u;
+                        uint32_t a_addr = L->pad_off + 16u * (qbase + t);
+                        uint32_t u;
 
                         if ((rc = mt_push(MT_LOAD, B + a_addr,
-                                          MT_ROWS(UB_A, 1u))) != 0) return rc;
+                                          MT_ROWS(UB_A, n))) != 0) return rc;
                         count++;
 
+                        for (u = 0; u < n; u++)
                         for (j = 0; j < njt; j++)
                         {
-                            uint32_t rs1 = MT_GEMM_RS1(UB_A, wb + j);
+                            uint32_t crow0 = UB_C + ((t + u) * 4u);
+                            uint32_t rs1 = MT_GEMM_RS1(UB_A + u, wb + j);
                             /* The first tap of the whole output overwrites C and
                              * every later tap accumulates.  This is a property
                              * of the tap, so it must be recomputed for each
