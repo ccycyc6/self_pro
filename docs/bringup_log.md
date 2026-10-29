@@ -18,7 +18,7 @@
 | B5 | 张量上板 | ✅ PASS | 2026-10-29 | `5D52CA26…` | 40/415 | +17.1 ns | 板上 golden diff 0 bytes，7468368 cycles |
 | B6-pre | 摄像头→DDR3→HDMI 独立位流 | ✅ PASS | 2026-10-28 | `F5D0EED6…` | 9/415 | 0 failing | 画面干净 |
 | B6 | 并入视频（+SoC） | ✅ PASS | 2026-10-29 | `73485295…` | 49/415 | hold −0.07 | 画面 + golden 0 同时成立 |
-| B7a | 摄像头 → SoC（无 OSD） | 🔶 位流就绪 | 2026-10-29 | `3AD6DA11…` | 50/415 | hold −0.07 | 待上板 |
+| B7a | 摄像头 → SoC（无 OSD） | ✅ PASS | 2026-10-30 | `B383CC8B…` | 50/415 | hold −0.07 | 板上出真实灰度与检测坐标 |
 
 ---
 
@@ -233,9 +233,9 @@ SYS P=1 D=1 H=1 C=1
 
 - **日期**：2026-10-29   **提交**：`227cb0d`   **tag**：待上板
 - **位流**：`build/pango/b7/generate_bitstream/video_fb_top.sbit`（9,188,552 B）
-- **sha256**：`25A6ACAFF5607C64EC3689785D1400B03D4D0C93B4D9970ABEAE02E86D09F52B`
-  （第一版 `3AD6DA11…` 用真双端口 RAM，PDS 没推断出来，读回全 0；
-  改成异步 FIFO + 单时钟 RAM，并修了 MMIO 读差一拍）
+- **sha256**：`B383CC8B72A6A482716F5C7DA8793F32EDF8F68DCED556441942651383BE5F33`
+  （三版演进：`3AD6DA11…` 双端口 RAM 读回全 0 → `25A6ACAF…` 改 FIFO 仍全 0
+  → `B383CC8B…` 修正行结构后成功）
 - **资源**：LUT 25,297/159,800 (15.83%)，REG 14,286，**DRM 50/415**
 - **固件**：`build/fw/cam_board.bin`（64,632 B，`tools/build_cam_board.sh`）
 - **新增**：`cam_cap` 640×640 中心裁剪 + 20:1 抽取 → 32×32；`cam_buf` 真双时钟
@@ -244,7 +244,17 @@ SYS P=1 D=1 H=1 C=1
 
 ```text
 camera detector ready, watching the 32x32 thumbnail
-cam f=137 cell=(5,3) box=(420,100)-(440,120) t=268000
+  cam stat min=11 max=250 mean=100
+  cam wrcnt=401536 line=107 pix=1279
+  raw rgb565: 9492 2187 41eb 41ec
+cam f=384 cell=(4,3) box=(400,100)-(420,120) t=7164510
+
+- **结论**：**PASS**。真实画面进入 SoC：`min/max/mean` 合理、`wrcnt` 每帧 +1024、
+  行/像素计数器在 0..719 / 0..1279 内滚动，并且玩具模型开始出坐标。
+- **踩坑记录**：最早的 `cam_cap` 用“空白期”推进行号，在真实时序下**一次都没采到**
+  （读回全 0 曾被误判成双端口 RAM 问题）。改成 **`pixel_de` 上升沿界定行结构** 后
+  一次成功。教训：像素域的行/列必须由 `de` 边沿定义，不能依赖空白期长度。
+- **结构变化**：`cam_buf`（真双端口）弃用，改为 `cam_fifo` + `cam_store`（单时钟 RAM）。
 ```
 
 ---
