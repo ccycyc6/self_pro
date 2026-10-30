@@ -445,3 +445,11 @@ scratch (0x1000_0000)
 - 固件在提交框之前写 `"NN:NN LLL"`（当前格坐标 + 块亮度），两者同一个 toggle 锁存。
 
 验收：屏幕左下应出现类似 `05:02 216` 的白色数字，跟着绿框一起变。
+**P3.1 位流（2026-10-30 14:42）**
+
+    build/pango/p2a/generate_bitstream/video_fb_top.sbit
+    sha256 E60D9CCD310BA74DF42D81A67D3F400AE52440B9AE6B2FE66C109CF77494DD66
+    LUT 25,871 (16.2%)   DRM 53/415
+
+上板验证时板子已从 USB 上断开（CP210x 与 FTDI 都不在设备列表里），
+待重新插上后补测。
