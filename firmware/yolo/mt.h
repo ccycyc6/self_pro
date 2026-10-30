@@ -24,6 +24,7 @@
 #define MT_RESULT      (MT_BASE + 0x14u)
 #define MT_BSTEP       (MT_BASE + 0x18u)   /* burst row steps: a|b<<8|c<<16 */
 
+
 #define MT_MMIO32(address) (*(volatile uint32_t *)(uintptr_t)(address))
 
 /* MT_STATUS bits.  A read taken while BUSY is clear consumes all of them, so a
@@ -73,6 +74,7 @@ static inline uint32_t mt_enc(uint32_t funct7, uint32_t funct3, uint32_t rd)
 #define MT_GEMM2D(nu, nj) (mt_enc(0x09u, 0x0u, 0u) | \
                            ((((uint32_t)(nj)) & 0x1Fu) << 20) | \
                            ((((uint32_t)(nu)) & 0x1Fu) << 15))
+
 
 /* Row steps for the next burst: a and b live in rs1's two bytes, c in rs2's
  * low byte. */

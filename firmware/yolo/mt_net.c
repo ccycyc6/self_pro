@@ -213,7 +213,11 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                     {
                         uint32_t n = ((ntiles - t) < 4u) ? (ntiles - t) : 4u;
                         uint32_t a_addr = L->pad_off + 16u * (qbase + t);
-                        uint32_t u;
+                        uint32_t crow0 = UB_C + (t * 4u);
+                        uint32_t rs1 = MT_GEMM_RS1(UB_A, wb);
+                        uint32_t rs2 = MT_GEMM_RS2(crow0,
+                                                   (tc == 0u && q == tc)
+                                                       ? 0u : 1u);
 
                         if ((rc = mt_push(MT_LOAD, B + a_addr,
                                           MT_ROWS(UB_A, n))) != 0) return rc;
@@ -222,19 +226,10 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                         /* One push covers the whole u x j grid of this tile
                          * group: the shim walks the columns (A row +1, C row
                          * +4) and the output groups inside a column (weight
-                         * row +1).  The C row starts at the group's first
-                         * column, exactly as the scalar version did. */
-                        {
-                            uint32_t crow0 = UB_C + (t * 4u);
-                            uint32_t rs1 = MT_GEMM_RS1(UB_A, wb);
-                            uint32_t rs2 = MT_GEMM_RS2(crow0,
-                                                       (tc == 0u && q == tc)
-                                                           ? 0u : 1u);
-
-                            if ((rc = mt_push(MT_GEMM2D(n, njt), rs1, rs2)) != 0)
-                                return rc;
-                            count++;
-                        }
+                         * row +1). */
+                        if ((rc = mt_push(MT_GEMM2D(n, njt), rs1, rs2)) != 0)
+                            return rc;
+                        count++;
                     }
                 }
             }
