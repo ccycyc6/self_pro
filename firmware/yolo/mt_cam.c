@@ -195,21 +195,12 @@ static void track_filter(int *cx, int *cy)
         cand_n = 0;
         return;
     }
-    if (*cx == hold_x && *cy == hold_y) {
-        cand_n = 0;
-    } else if (*cx == cand_x && *cy == cand_y) {
-        if (++cand_n >= 2) {
-            hold_x = *cx;
-            hold_y = *cy;
-            cand_n = 0;
-        }
-    } else {
-        cand_x = *cx;
-        cand_y = *cy;
-        cand_n = 1;
-    }
-    *cx = hold_x;
-    *cy = hold_y;
+    /* Confirm with a single frame: two-frame confirmation made the box feel
+     * laggy (2 x 41 ms).  Jitter is fought at the source instead, by averaging
+     * 4x4 samples per thumbnail cell in cam_cap. */
+    (void)cand_x; (void)cand_y; (void)cand_n;
+    hold_x = *cx;
+    hold_y = *cy;
 }
 
 static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
