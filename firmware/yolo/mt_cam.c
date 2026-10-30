@@ -125,20 +125,21 @@ static void track_bright(const uint8_t *img, int *bx, int *by,
     }
 }
 
-/* "NN:NN LLL" on screen: the tracked cell and the block's luma. */
-static void publish_text(int gx, int gy, unsigned luma)
+/* "XXX:YYY" on screen: the top-left corner of the box in display pixels, so
+ * it can be compared with the picture directly. */
+static void publish_text(uint32_t x0, uint32_t y0)
 {
     uint32_t v[8];
     int i;
 
-    v[0] = (uint32_t)(gx / 10);
-    v[1] = (uint32_t)(gx % 10);
-    v[2] = GLYPH_COLON;
-    v[3] = (uint32_t)(gy / 10);
-    v[4] = (uint32_t)(gy % 10);
-    v[5] = GLYPH_SPACE;
-    v[6] = (uint32_t)((luma / 100u) % 10u);
-    v[7] = (uint32_t)((luma / 10u) % 10u);
+    v[0] = (x0 / 100u) % 10u;
+    v[1] = (x0 / 10u) % 10u;
+    v[2] = x0 % 10u;
+    v[3] = GLYPH_COLON;
+    v[4] = (y0 / 100u) % 10u;
+    v[5] = (y0 / 10u) % 10u;
+    v[6] = y0 % 10u;
+    v[7] = GLYPH_SPACE;
 
     for (i = 0; i < 8; i++)
         ares_mmio_write(OSD_TEXT_BASE + (uint32_t)i * 4u, v[i]);
@@ -235,7 +236,7 @@ int yolo_camera_run(void)
         track_bright(img, &bx, &by, &bavg, &mean);
 
         if (bavg > mean + TRACK_MARGIN) {
-            publish_text(bx, by, (unsigned)bavg);
+            publish_text((uint32_t)(320 + bx * 80), (uint32_t)(40 + by * 80));
             publish_box(bx, by, 1);
             printf("f=%u bright=(%d,%d) box=(%d,%d)-(%d,%d) luma=%u/%u\n",
                    (unsigned)frame, bx, by,
