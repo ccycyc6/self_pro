@@ -7,6 +7,7 @@ module tb_soc;
   logic [31:0] gpio_in = 32'd0, gpio_out, gpio_dir;
   logic mt_irq, dbg_halt, dbg_commit;
   logic [10:0] cam_addr;
+  logic [10:0] cam2_addr;
   logic        cam_bank;
   logic [15:0] cam_data = 16'd0;
   logic [31:0] cam_frame = 32'd0;
@@ -26,6 +27,7 @@ module tb_soc;
     .uart_rx, .uart_tx,
     .gpio_in, .gpio_out, .gpio_dir,
     .cam_addr, .cam_bank, .cam_data, .cam_frame, .cam_wrcnt, .cam_dbg,
+    .cam2_addr, .cam2_data(16'd0), .cam2_frame(32'd0),
     .osd_boxes, .osd_tog, .osd_text,
     .mt_irq, .dbg_halt, .dbg_pc, .dbg_commit,
     .dbg_pc_f, .dbg_ifid_valid, .dbg_idex_valid, .dbg_exmem_valid,

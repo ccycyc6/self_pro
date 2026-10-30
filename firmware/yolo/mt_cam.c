@@ -62,6 +62,32 @@ static volatile uint8_t *const buf8 = (volatile uint8_t *)(uintptr_t)MT_BUF_BASE
 
 static uint8_t rd8(uint32_t off) { return buf8[off]; }
 
+/* Same readback for the second camera (0xD000_6000 window, stereo bring-up). */
+static uint32_t cam2_grab(uint8_t *dst)
+{
+    uint32_t frame;
+
+    for (;;) {
+        uint32_t f0 = ARES_MMIO32(0xD0006008u);
+        uint32_t i;
+
+        for (i = 0; i < 1024u; i++) {
+            uint32_t p = ARES_MMIO32(0xD0006000u + i * 4u) & 0xFFFFu;
+            uint32_t r = ((p >> 11) & 0x1Fu) << 3;
+            uint32_t g = ((p >> 5) & 0x3Fu) << 2;
+            uint32_t b = (p & 0x1Fu) << 3;
+
+            dst[i * 4u + 0u] = (uint8_t)(r >> 1);
+            dst[i * 4u + 1u] = (uint8_t)(g >> 1);
+            dst[i * 4u + 2u] = (uint8_t)(b >> 1);
+            dst[i * 4u + 3u] = 0;
+        }
+
+        frame = ARES_MMIO32(0xD0006008u);
+        if (frame == f0) return frame;
+    }
+}
+
 /* One 32x32 RGB565 thumbnail -> NET_IMAGE, 4-channel layout, channel 0 = luma. */
 static uint32_t cam_grab(uint8_t *dst)
 {
@@ -323,6 +349,36 @@ int yolo_camera_run(void)
     printf("tracking the brightest 80x80 block, accelerator every %d frames\n",
            DET_EVERY);
     ares_mmio_write(ARES_LED_ADDR, 1u);
+
+#ifdef CAM_DUMP
+    /* Side-by-side 16x16 view: left = cmos1, right = cmos2.  Both frame
+     * counters must advance and both pictures must show the same scene,
+     * offset horizontally by the stereo baseline. */
+    {
+        static uint8_t img2[4096];
+        int x, y;
+
+        for (;;) {
+            frame = cam_grab(img);
+            (void)cam2_grab(img2);
+            printf("f1=%u f2=%u\n",
+                   (unsigned)ARES_MMIO32(0xD0003000u),
+                   (unsigned)ARES_MMIO32(0xD0006008u));
+            for (y = 0; y < 16; y++) {
+                char line[34];
+                for (x = 0; x < 16; x++) {
+                    uint32_t a = img[(((uint32_t)y * 2u) * 32u + (uint32_t)x * 2u) * 4u];
+                    uint32_t b = img2[(((uint32_t)y * 2u) * 32u + (uint32_t)x * 2u) * 4u];
+                    line[x]      = (a > 50u) ? '#' : (a > 35u ? '+' : (a > 20u ? '.' : ' '));
+                    line[x + 16] = ' ';
+                    line[17 + x] = (b > 50u) ? '#' : (b > 35u ? '+' : (b > 20u ? '.' : ' '));
+                }
+                line[33] = 0;
+                printf("%s\n", line);
+            }
+        }
+    }
+#endif
 
     /* The trained model drives the box now; the brightness tracker is kept as a
      * reference line on the UART so a colour-selective detection can be told

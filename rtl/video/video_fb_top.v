@@ -648,6 +648,95 @@ module video_fb_top #(
         .rd_data     (cam_rd_data)
     );
 
+    // ------------------------------------------------- second camera (stereo)
+    // The module is a double-DVP OV5640 pair: two independent sensors, each
+    // with its own I2C, reset and 8-bit bus.  cmos2 gets its own init, DVP
+    // decode and 32x32 thumbnail so the two views can be compared directly;
+    // the 720p path above still uses cmos1 only.
+    wire        cam2_pixclk, cam2_pixrst, cam2_pixvs, cam2_de, cam2_done;
+    wire [15:0] cam2_rgb;
+    wire        cam2_wr_en, cam2_tog;
+    wire [27:0] cam2_wr_word;
+    wire [31:0] cam2_wr_cnt;
+    wire [23:0] cam2_dbg_pix;
+    wire [31:0] cam2_vs_cnt, cam2_ln_cnt, cam2_px_cnt, cam2_pclk_cnt;
+    wire [10:0] cam2_rd_addr;
+    wire        cam2_rd_bank;
+    wire [15:0] cam2_rd_data;
+    wire [31:0] cam2_frame_w;
+    wire        cam2_fifo_empty, cam2_fifo_rd_en;
+    wire [27:0] cam2_fifo_word;
+
+    video_capture_wrap u_capture2 (
+        .clk_27m      (clk_27m),
+        .clk_cam      (clk_cam),
+        .rst_sys      (rst_sys),
+        .cam_reset    (cmos2_reset),
+        .cam_scl      (cmos2_scl),
+        .cam_sda      (cmos2_sda),
+        .cam_pclk     (cmos2_pclk),
+        .cam_vsync    (cmos2_vsync),
+        .cam_href     (cmos2_href),
+        .cam_data     (cmos2_data),
+        .pixel_clk    (cam2_pixclk),
+        .pixel_rst    (cam2_pixrst),
+        .pixel_vsync  (cam2_pixvs),
+        .pixel_de     (cam2_de),
+        .pixel_rgb565 (cam2_rgb),
+        .cam_init_done(cam2_done),
+        .dbg_vsync_cnt(cam2_vs_cnt),
+        .dbg_line_cnt (cam2_ln_cnt),
+        .dbg_pixel_cnt(cam2_px_cnt),
+        .dbg_pclk_cnt (cam2_pclk_cnt)
+    );
+
+    cam_cap u_cam_cap2 (
+        .pixel_clk    (cam2_pixclk),
+        .pixel_rst    (cam2_pixrst),
+        .pixel_de     (cam2_de),
+        .pixel_rgb565 (cam2_rgb),
+        .pixel_vsync  (cam2_pixvs),
+        .wr_en        (cam2_wr_en),
+        .wr_data      (cam2_wr_word),
+        .frame_tog    (cam2_tog),
+        .wr_cnt       (cam2_wr_cnt),
+        .dbg          (cam2_dbg_pix)
+    );
+
+    cam_fifo #(
+        .WIDTH(28),
+        .AW   (5),
+        .DEPTH(32)
+    ) u_cam_fifo2 (
+        .wr_clk  (cam2_pixclk),
+        .wr_rst  (cam2_pixrst),
+        .wr_en   (cam2_wr_en),
+        .wr_data (cam2_wr_word),
+        .full    (),
+        .rd_clk  (clk_27m),
+        .rd_rst  (rst_sys),
+        .rd_en   (cam2_fifo_rd_en),
+        .rd_data (cam2_fifo_word),
+        .empty   (cam2_fifo_empty)
+    );
+
+    cam_store u_cam_store2 (
+        .clk         (clk_27m),
+        .rst         (rst_sys),
+        .fifo_data   (cam2_fifo_word),
+        .fifo_empty  (cam2_fifo_empty),
+        .fifo_rd_en  (cam2_fifo_rd_en),
+        .rd_addr     (cam2_rd_addr),
+        .rd_bank     (cam2_rd_bank),
+        .rd_data     (cam2_rd_data)
+    );
+
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire _unused_cam2 = &{1'b0, cam2_done, cam2_vs_cnt, cam2_ln_cnt,
+                          cam2_px_cnt, cam2_pclk_cnt, cam2_wr_cnt,
+                          cam2_dbg_pix, 24'd0};
+    /* verilator lint_on UNUSEDSIGNAL */
+
     // Completed-frame counter on the SoC clock (toggle synchroniser).
     reg [2:0]  cam_tog_sync;
     reg [31:0] cam_frame_q;
@@ -664,6 +753,23 @@ module video_fb_top #(
     end
 
     assign cam_frame_w = cam_frame_q;
+
+    // Same counter for the second camera.
+    reg [2:0]  cam2_tog_sync;
+    reg [31:0] cam2_frame_q;
+
+    always @(posedge clk_27m or negedge rst_n) begin
+        if (!rst_n) begin
+            cam2_tog_sync <= 3'd0;
+            cam2_frame_q  <= 32'd0;
+        end else begin
+            cam2_tog_sync <= {cam2_tog_sync[1:0], cam2_tog};
+            if (cam2_tog_sync[2] ^ cam2_tog_sync[1])
+                cam2_frame_q <= cam2_frame_q + 32'd1;
+        end
+    end
+
+    assign cam2_frame_w = cam2_frame_q;
 
     // Debug: how many samples the capture has written (2FF, count only).
     reg [31:0] cam_wrcnt_s1, cam_wrcnt_s2;
@@ -755,6 +861,9 @@ module video_fb_top #(
         .cam_frame       (cam_frame_w),
         .cam_wrcnt       (cam_wrcnt_s2),
         .cam_dbg         (cam_dbg_s2),
+        .cam2_addr       (cam2_rd_addr),
+        .cam2_data       (cam2_rd_data),
+        .cam2_frame      (cam2_frame_w),
         .osd_boxes       (osd_boxes_w),
         .osd_tog         (osd_tog_w),
         .osd_text        (osd_text_w),

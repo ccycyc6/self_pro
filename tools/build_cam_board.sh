@@ -21,6 +21,11 @@ else
     OUT=cam_board
 fi
 
+# EXTRA_DEFS="-DCAM_DUMP" adds experiment-only code paths.
+if [ -n "${EXTRA_DEFS:-}" ]; then
+    CFLAGS="$CFLAGS $EXTRA_DEFS"
+fi
+
 mkdir -p build/fw
 rm -f build/fw/cam_*.o
 
