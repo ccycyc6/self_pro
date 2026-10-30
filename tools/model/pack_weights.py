@@ -306,10 +306,10 @@ def main():
     # Head output is [c_out_group][h][w][4] = 2 groups x 8 x 8 x 4.
     gold = np.zeros((ns, GRID * GRID * 8), dtype=np.uint8)
     for i in range(ns):
-        img = np.round(xte[i, :, :, 0] / s_in[0]).astype(np.int32)
-        img = np.clip(img, -128, 127).reshape(H, W, 1)
-        flat = np.zeros((H, W, C_IN), dtype=np.int32)
-        flat[:, :, 0] = img[:, :, 0]
+        # Every channel is quantised, not just the first: the trained model looks
+        # at colour, and dropping G and B turned it back into a grey detector.
+        flat = np.round(xte[i] / s_in[0]).astype(np.int32)
+        flat = np.clip(flat, -128, 127)
         imgs[i] = (flat.reshape(-1) & 0xFF).astype(np.uint8)
 
         out = int_forward(imgs[i], packed)

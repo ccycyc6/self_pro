@@ -86,9 +86,12 @@ static uint32_t cam_grab(uint8_t *dst)
 
             /* The trained model looks at colour, so the three channels carry
              * the actual R, G, B instead of a luma value. */
-            dst[i * 4u + 0u] = (uint8_t)r;
-            dst[i * 4u + 1u] = (uint8_t)g;
-            dst[i * 4u + 2u] = (uint8_t)b;
+            /* The accelerator's operands are signed bytes, so the 0..255 camera
+             * value is halved into 0..127; the packed input scale assumes the
+             * same convention (calibration images are divided the same way). */
+            dst[i * 4u + 0u] = (uint8_t)(r >> 1);
+            dst[i * 4u + 1u] = (uint8_t)(g >> 1);
+            dst[i * 4u + 2u] = (uint8_t)(b >> 1);
             dst[i * 4u + 3u] = 0;
         }
 
@@ -100,7 +103,8 @@ static uint32_t cam_grab(uint8_t *dst)
 /* Brightest 4x4 block of the thumbnail (one eighth of the crop on each axis),
  * plus the frame mean for the "is anything actually bright" test. */
 static void track_bright(const uint8_t *img, int *bx, int *by,
-                         uint32_t *bavg, uint32_t *mean)
+                         uint32_t *bavg, uint32_t *mean, uint32_t *rr,
+                         uint32_t *gg, uint32_t *bb)
 {
     uint32_t total = 0, best = 0;
     int i, j, yy, xx;
@@ -109,6 +113,7 @@ static void track_bright(const uint8_t *img, int *bx, int *by,
     *mean = total / 1024u;
 
     *bx = 0; *by = 0; *bavg = 0;
+    *rr = 0; *gg = 0; *bb = 0;
 
     for (j = 0; j < 8; j++) {
         for (i = 0; i < 8; i++) {
@@ -118,10 +123,25 @@ static void track_bright(const uint8_t *img, int *bx, int *by,
                     acc += img[((uint32_t)(j * 4 + yy) * 32u +
                                 (uint32_t)(i * 4 + xx)) * 4u];
             if (acc > best) {
+                uint32_t sr = 0, sg = 0, sb = 0;
+
                 best  = acc;
                 *bx   = i;
                 *by   = j;
                 *bavg = acc / 16u;
+                /* Mean colour of the winning block: the quickest way to see
+                 * whether the camera really delivers R/G/B in that order. */
+                for (yy = 0; yy < 4; yy++)
+                    for (xx = 0; xx < 4; xx++) {
+                        uint32_t off = ((uint32_t)(j * 4 + yy) * 32u +
+                                        (uint32_t)(i * 4 + xx)) * 4u;
+                        sr += img[off + 0u];
+                        sg += img[off + 1u];
+                        sb += img[off + 2u];
+                    }
+                *rr = sr / 16u;
+                *gg = sg / 16u;
+                *bb = sb / 16u;
             }
         }
     }
@@ -157,6 +177,33 @@ static void publish_box(int gx, int gy, int visible)
     ares_mmio_write(OSD_BOX_BASE + 8u, x0 + 80u);
     ares_mmio_write(OSD_BOX_BASE + 12u, y0 + 80u);
     ares_mmio_write(OSD_BOX_BASE + 16u, visible ? 1u : 0u);
+}
+
+/* Temporal stability.  The head answers on an 8x8 grid, so at distance a single
+ * frame easily flips to a neighbouring cell and the box looks like it is
+ * jumping.  A new cell must win twice before the box moves, and the previous
+ * box survives a few frames without a detection. */
+static int hold_x = -1, hold_y = -1;
+static int cand_x = -1, cand_y = -1, cand_n = 0;
+static int lost_n = 0;
+
+static void track_filter(int *cx, int *cy)
+{
+    if (*cx == hold_x && *cy == hold_y) {
+        cand_n = 0;
+    } else if (*cx == cand_x && *cy == cand_y) {
+        if (++cand_n >= 2) {
+            hold_x = *cx;
+            hold_y = *cy;
+            cand_n = 0;
+        }
+    } else {
+        cand_x = *cx;
+        cand_y = *cy;
+        cand_n = 1;
+    }
+    *cx = hold_x;
+    *cy = hold_y;
 }
 
 static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
@@ -200,11 +247,23 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
         int cx = (int)((sx * 10) / sum) / 10;
         int cy = (int)((sy * 10) / sum) / 10;
 
+        lost_n = 0;
+        track_filter(&cx, &cy);
         publish_text((uint32_t)(320 + cx * 80), (uint32_t)(40 + cy * 80));
         publish_box(cx, cy, 1);
         printf("  net: cell=(%d,%d) t=%u busy=%u\n",
                cx, cy, (unsigned)hot, (unsigned)busy);
+    } else if (hold_x >= 0 && lost_n < 6) {
+        /* Brief dropouts are common at distance; keep the box where it was
+         * instead of blinking it out. */
+        lost_n++;
+        publish_box(hold_x, hold_y, 1);
+        printf("  net: hold cell=(%d,%d) t=%u busy=%u\n",
+               hold_x, hold_y, (unsigned)hot, (unsigned)busy);
     } else {
+        hold_x = -1;
+        hold_y = -1;
+        cand_n = 0;
         publish_box(0, 0, 0);
         printf("  net: no detection t=%u busy=%u\n",
                (unsigned)hot, (unsigned)busy);
@@ -241,16 +300,17 @@ int yolo_camera_run(void)
      * apart from "the brightest thing in view". */
     for (;;) {
         int bx, by;
-        uint32_t bavg, mean;
+        uint32_t bavg, mean, rr, gg, bb;
 
         frame = cam_grab(img);
-        track_bright(img, &bx, &by, &bavg, &mean);
+        track_bright(img, &bx, &by, &bavg, &mean, &rr, &gg, &bb);
         det_copy_to_scratch(NET_IMAGE, img, 4096u);
 
         run_detector(L, frame, &cmds);
 
-        printf("f=%u bright=(%d,%d) luma=%u/%u\n",
-               (unsigned)frame, bx, by, (unsigned)bavg, (unsigned)mean);
+        printf("f=%u bright=(%d,%d) luma=%u/%u rgb=%u,%u,%u\n",
+               (unsigned)frame, bx, by, (unsigned)bavg, (unsigned)mean,
+               (unsigned)rr, (unsigned)gg, (unsigned)bb);
     }
     return 0;
 }

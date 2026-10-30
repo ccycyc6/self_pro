@@ -33,6 +33,12 @@ TARGET_RGB = (1.00, 0.12, 0.12)
 DISTRACTORS = [(0.95, 0.95, 0.95), (0.60, 0.60, 0.60), (0.25, 0.25, 0.25),
                (0.10, 0.20, 1.00), (0.15, 0.90, 0.20)]
 
+# A real scene is not a set of saturated primaries on black: objects are small
+# when far away and their colours are muted.  Randomising size, saturation and
+# brightness (plus sensor noise) is what stops the box from falling apart as
+# soon as the target moves away from the lens.
+SIZE_MIN, SIZE_MAX = 4, 16
+
 
 def put(x, i, top, left, rgb, size):
     x[i, top:top + size, left:left + size, 0] = rgb[0]
@@ -46,23 +52,30 @@ def make_batch(n):
     x = np.zeros((n, H, W, C_IN), np.float32)
     y = np.zeros((n, GRID, GRID, 3), np.float32)
     for i in range(n):
-        top = int(rng.integers(0, H - BOX + 1))
-        left = int(rng.integers(0, W - BOX + 1))
-        put(x, i, top, left, TARGET_RGB, BOX)
+        size = int(rng.integers(SIZE_MIN, SIZE_MAX + 1))
+        top = int(rng.integers(0, H - size + 1))
+        left = int(rng.integers(0, W - size + 1))
+        gain = float(rng.uniform(0.45, 1.0))
+        put(x, i, top, left, tuple(c * gain for c in TARGET_RGB), size)
         for _ in range(3):
-            dt = int(rng.integers(0, H - BOX + 1))
-            dl = int(rng.integers(0, W - BOX + 1))
-            if abs(dt - top) < BOX + 2 and abs(dl - left) < BOX + 2:
+            dsize = int(rng.integers(SIZE_MIN, SIZE_MAX + 1))
+            dt = int(rng.integers(0, H - dsize + 1))
+            dl = int(rng.integers(0, W - dsize + 1))
+            if abs(dt - top) < size + 2 and abs(dl - left) < size + 2:
                 continue
-            put(x, i, dt, dl, DISTRACTORS[int(rng.integers(0, len(DISTRACTORS)))], BOX)
+            col = DISTRACTORS[int(rng.integers(0, len(DISTRACTORS)))]
+            put(x, i, dt, dl,
+                tuple(c * float(rng.uniform(0.4, 1.0)) for c in col), dsize)
         for cy in range(GRID):
             for cx in range(GRID):
                 r0, c0 = cy * CELL, cx * CELL
-                dh = max(0, min(top + BOX, r0 + CELL) - max(top, r0))
-                dw = max(0, min(left + BOX, c0 + CELL) - max(left, c0))
+                dh = max(0, min(top + size, r0 + CELL) - max(top, r0))
+                dw = max(0, min(left + size, c0 + CELL) - max(left, c0))
                 y[i, cy, cx, 0] = 1.0 if (dh * dw) >= (CELL * CELL) // 2 else 0.0
-        y[i, :, :, 1] = BOX / H
-        y[i, :, :, 2] = BOX / W
+        y[i, :, :, 1] = size / H
+        y[i, :, :, 2] = size / W
+    x += rng.normal(0.0, 3.0 / 255.0, x.shape).astype(np.float32)
+    np.clip(x, 0.0, 1.0, out=x)
     return x, y
 
 
