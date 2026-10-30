@@ -1,4 +1,4 @@
-\`timescale 1ns/1ps
+`timescale 1ns/1ps
 // ---------------------------------------------------------------------------
 // stereo_cap - 320x240 luma image for one eye of the stereo pair.
 //
@@ -38,12 +38,20 @@ module stereo_cap (
 
     wire de_rise = pixel_de && !de_d;
 
-    wire [7:0] r8 = {pixel_rgb565[15:11], 3'b000};
-    wire [7:0] g8 = {pixel_rgb565[10:5],  2'b00};
-    wire [7:0] b8 = {pixel_rgb565[4:0],   3'b000};
-    wire [15:0] lum16 = 16'd77 * {8'd0, r8} + 16'd151 * {8'd0, g8}
-                      + 16'd28 * {8'd0, b8};
-    wire [7:0]  luma  = lum16[15:8];
+    // Luma with shifts and adds only.  The proper BT.601 form needs three
+    // multipliers (77/151/28), and that combination was a 26 ns path in this
+    // fabric -- it showed up as a -2.2 ns violation.  R + 2G + B is just as
+    // usable for matching, which only needs a consistent brightness channel.
+    wire [4:0] r5 = pixel_rgb565[15:11];
+    wire [5:0] g6 = pixel_rgb565[10:5];
+    wire [4:0] b5 = pixel_rgb565[4:0];
+
+    // RGB565 -> 8-bit channels are just zero-extension, and dividing the sum
+    // by four cancels it: (r8 + 2*g8 + b8)/4 = 2*(r5 + g6 + b5).
+    wire [7:0] r2 = {2'b00, r5, 1'b0};
+    wire [7:0] g2 = {1'b0, g6, 1'b0};
+    wire [7:0] b2 = {2'b00, b5, 1'b0};
+    wire [7:0] luma = r2 + g2 + b2;      // <= 250
 
     always @(posedge pixel_clk) begin
         if (pixel_rst) begin
@@ -89,7 +97,7 @@ module stereo_cap (
                 // every second pixel of every second line becomes a cell
                 if (!ph && acc_line && (x_cnt < CROP_W)) begin
                     wr_en   <= 1'b1;
-                    wr_addr <= {row, col};
+                    wr_addr <= {row, col[7:0]};   // 9 + 8 = 17 bits
                     wr_data <= luma;
                     wr_cnt  <= wr_cnt + 32'd1;
                     if (col == 9'd319) col <= 9'd0;

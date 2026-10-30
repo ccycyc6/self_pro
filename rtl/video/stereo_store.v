@@ -1,4 +1,4 @@
-\`timescale 1ns/1ps
+`timescale 1ns/1ps
 // ---------------------------------------------------------------------------
 // stereo_store - 320x240 byte image behind the SoC read window.
 //

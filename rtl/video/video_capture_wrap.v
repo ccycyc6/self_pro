@@ -30,6 +30,7 @@ module video_capture_wrap #(
     output wire        cam_reset,        // active low
     inout  wire        cam_scl,
     inout  wire        cam_sda,
+    input  wire        cam_rst_ext,      // reset release from the shared sequencer
     input  wire        cam_pclk,
     input  wire        cam_vsync,
     input  wire        cam_href,
@@ -53,6 +54,9 @@ module video_capture_wrap #(
 `ifdef VIDEO_SIM
     assign cam_reset_i    = 1'b1;
     assign cam_init_done_i = 1'b1;
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire _unused_ext = &{1'b0, cam_rst_ext};
+    /* verilator lint_on UNUSEDSIGNAL */
     assign cam_scl        = 1'b1;
     assign cam_sda        = 1'bz;
     /* verilator lint_off UNUSEDSIGNAL */
@@ -73,9 +77,11 @@ module video_capture_wrap #(
             .initial_en   (initial_en_unused)
         );
     end else begin : g_nopower
-        // cmos2's reset follows the system reset; the sequencer is not needed
-        // because cmos1 (which runs it) powers both sensors from the same rail.
-        assign cam_reset_i      = ~rst_sys;
+        // cmos2 shares the power rail and the sequencer with cmos1, so it just
+        // takes that reset release as an input.  Generating a second one is
+        // what PDS rejects: a register that settles at 1 is mapped onto its
+        // VCC net, and two such drivers collide ("_\$\$_VCC_\$\$_").
+        assign cam_reset_i        = cam_rst_ext;
         assign camera_pwnd_unused = 1'b0;
         assign initial_en_unused  = 1'b1;
     end
