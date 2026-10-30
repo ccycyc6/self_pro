@@ -114,7 +114,7 @@ static inline uint32_t mt_rd_mcycle(void)
  * a few cycles while a status read costs more, so queueing several commands and
  * polling once per batch removes most of the per-command host overhead.  The
  * driver keeps one slot free so a push can never be dropped. */
-#define MT_FIFO_DEPTH   8u
+#define MT_FIFO_DEPTH   64u
 #ifdef MT_BATCH_ONE
 #define MT_BATCH        1u
 #else

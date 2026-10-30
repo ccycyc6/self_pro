@@ -37,7 +37,7 @@ import minitensor_pkg::*;
 module mt_cvxif_shim #(
     parameter int unsigned ISSUE_TO_REGISTER  = 2,
     parameter int unsigned REGISTER_TO_COMMIT = 3,
-    parameter int unsigned FIFO_DEPTH         = 8
+    parameter int unsigned FIFO_DEPTH         = 64
 ) (
     input  logic        clk,
     input  logic        rst,           // synchronous, active high
