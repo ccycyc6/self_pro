@@ -189,6 +189,7 @@ module video_fb_top #(
                 .clk_27m      (clk_27m),
                 .clk_cam      (clk_cam),
                 .rst_sys      (rst_sys),
+                .cam_rst_ext  (cam_reset),
                 .cam_reset    (cam_reset),
                 .cam_scl      (cmos1_scl),
                 .cam_sda      (cmos1_sda),
@@ -208,14 +209,16 @@ module video_fb_top #(
                 .dbg_pclk_cnt (cap_pclk_cnt)
             );
             assign cmos1_reset = cam_reset;
-            assign cmos2_reset = 1'b1;
-            assign cmos2_scl   = 1'bz;
-            assign cmos2_sda   = 1'bz;
+            // cmos2 is driven by the second capture chain below, which runs at
+            // the same time: that is what makes the pair stereo instead of a
+            // build-time choice.  Do NOT tie cmos2_reset to 1'b1 here -- PDS
+            // folds it onto its VCC net and the second driver collides.
         end else begin : g_cam2
             video_capture_wrap u_capture (
                 .clk_27m      (clk_27m),
                 .clk_cam      (clk_cam),
                 .rst_sys      (rst_sys),
+                .cam_rst_ext  (cam_reset),
                 .cam_reset    (cam_reset),
                 .cam_scl      (cmos2_scl),
                 .cam_sda      (cmos2_sda),
@@ -674,6 +677,7 @@ module video_fb_top #(
         .clk_27m      (clk_27m),
         .clk_cam      (clk_cam),
         .rst_sys      (rst_sys),
+        .cam_rst_ext  (cam_reset),
         .cam_reset    (cmos2_reset),
         .cam_scl      (cmos2_scl),
         .cam_sda      (cmos2_sda),
@@ -739,6 +743,92 @@ module video_fb_top #(
                           cam2_px_cnt, cam2_pclk_cnt, cam2_wr_cnt,
                           cam2_dbg_pix, 24'd0};
     /* verilator lint_on UNUSEDSIGNAL */
+
+    // ------------------------------------------- 320x240 stereo pair (one byte)
+    // The 32x32 thumbnails are for detection; disparity needs 320 cells across
+    // the field (f = 275 px instead of 27 px), otherwise the whole parallax at
+    // 2 m is under one pixel.
+    wire        st_l_wr_en, st_r_wr_en, st_l_tog, st_r_tog;
+    wire [16:0] st_l_addr, st_r_addr;
+    wire [7:0]  st_l_data, st_r_data;
+    wire [31:0] st_l_cnt, st_r_cnt;
+    wire        st_l_fifo_empty, st_l_fifo_rd, st_r_fifo_empty, st_r_fifo_rd;
+    wire [24:0] st_l_fifo_word, st_r_fifo_word;
+    wire [31:0] cam_l_rd_addr, cam_r_rd_addr;
+    wire [16:0] st_l_rd_addr, st_r_rd_addr;
+    wire [7:0]  st_l_rd_data, st_r_rd_data;
+
+    stereo_cap u_stereo_cap_l (
+        .pixel_clk    (pixel_clk_io),
+        .pixel_rst    (pixel_rst),
+        .pixel_de     (pixel_de),
+        .pixel_rgb565 (pixel_rgb565),
+        .pixel_vsync  (pixel_vsync),
+        .wr_en        (st_l_wr_en),
+        .wr_addr      (st_l_addr),
+        .wr_data      (st_l_data),
+        .frame_tog    (st_l_tog),
+        .wr_cnt       (st_l_cnt)
+    );
+
+    cam_fifo #(
+        .WIDTH(25), .AW(6), .DEPTH(64)
+    ) u_st_l_fifo (
+        .wr_clk (pixel_clk_io), .wr_rst (pixel_rst),
+        .wr_en  (st_l_wr_en),   .wr_data({st_l_addr, st_l_data}),
+        .full   (),
+        .rd_clk (clk_27m),      .rd_rst (rst_sys),
+        .rd_en  (st_l_fifo_rd), .rd_data(st_l_fifo_word),
+        .empty  (st_l_fifo_empty)
+    );
+
+    stereo_store u_st_l_store (
+        .clk     (clk_27m),
+        .wr_addr (st_l_fifo_word[24:8]),
+        .wr_data (st_l_fifo_word[7:0]),
+        .wr_en   (st_l_fifo_rd),
+        .rd_addr (st_l_rd_addr),
+        .rd_data (st_l_rd_data)
+    );
+
+    assign st_l_fifo_rd = !st_l_fifo_empty;
+    assign st_l_rd_addr = cam_l_rd_addr;
+
+    stereo_cap u_stereo_cap_r (
+        .pixel_clk    (cam2_pixclk),
+        .pixel_rst    (cam2_pixrst),
+        .pixel_de     (cam2_de),
+        .pixel_rgb565 (cam2_rgb),
+        .pixel_vsync  (cam2_pixvs),
+        .wr_en        (st_r_wr_en),
+        .wr_addr      (st_r_addr),
+        .wr_data      (st_r_data),
+        .frame_tog    (st_r_tog),
+        .wr_cnt       (st_r_cnt)
+    );
+
+    cam_fifo #(
+        .WIDTH(25), .AW(6), .DEPTH(64)
+    ) u_st_r_fifo (
+        .wr_clk (cam2_pixclk), .wr_rst (cam2_pixrst),
+        .wr_en  (st_r_wr_en),  .wr_data({st_r_addr, st_r_data}),
+        .full   (),
+        .rd_clk (clk_27m),     .rd_rst (rst_sys),
+        .rd_en  (st_r_fifo_rd), .rd_data(st_r_fifo_word),
+        .empty  (st_r_fifo_empty)
+    );
+
+    stereo_store u_st_r_store (
+        .clk     (clk_27m),
+        .wr_addr (st_r_fifo_word[24:8]),
+        .wr_data (st_r_fifo_word[7:0]),
+        .wr_en   (st_r_fifo_rd),
+        .rd_addr (st_r_rd_addr),
+        .rd_data (st_r_rd_data)
+    );
+
+    assign st_r_fifo_rd = !st_r_fifo_empty;
+    assign st_r_rd_addr = cam_r_rd_addr;
 
     // Completed-frame counter on the SoC clock (toggle synchroniser).
     reg [2:0]  cam_tog_sync;
@@ -867,6 +957,10 @@ module video_fb_top #(
         .cam2_addr       (cam2_rd_addr),
         .cam2_data       (cam2_rd_data),
         .cam2_frame      (cam2_frame_w),
+        .st_l_addr       (cam_l_rd_addr),
+        .st_l_data       (st_l_rd_data),
+        .st_r_addr       (cam_r_rd_addr),
+        .st_r_data       (st_r_rd_data),
         .osd_boxes       (osd_boxes_w),
         .osd_tog         (osd_tog_w),
         .osd_text        (osd_text_w),

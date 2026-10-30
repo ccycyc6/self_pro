@@ -31,6 +31,12 @@ module ares_mmio_bus (
   output logic [10:0] cam2_addr,
   input  logic [15:0] cam2_data,
   input  logic [31:0] cam2_frame,
+  // 320x240 stereo pair: 0xD000_7000 (left) / 0xD000_8000 (right), one byte per
+  // word, address = y*320 + x
+  output logic [31:0] st_l_addr,
+  input  logic [7:0]  st_l_data,
+  output logic [31:0] st_r_addr,
+  input  logic [7:0]  st_r_data,
   output logic        cam_bank,
   input  logic [15:0] cam_data,
   input  logic [31:0] cam_frame,
@@ -48,7 +54,7 @@ module ares_mmio_bus (
 );
   import ares_pkg::*;
 
-  typedef enum logic [2:0] {M_IDLE, M_RESP, M_CAM, M_CAM2, M_CAM2R} state_t;
+  typedef enum logic [2:0] {M_IDLE, M_RESP, M_CAM, M_CAM2, M_CAM2R, M_STL, M_STR} state_t;
   state_t state_q;
   logic [31:0] rsp_data_q;
 
@@ -59,6 +65,8 @@ module ares_mmio_bus (
   wire sel_camctl = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h3);
   // 0xD000_6000 : camera 2 thumbnail (read), 0x6008 : its frame counter
   wire sel_cam2   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h6);
+  wire sel_stl    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h7);
+  wire sel_str    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h8);
   wire sel_osd    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h4);
   wire sel_text   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h5);
 
@@ -116,8 +124,11 @@ module ares_mmio_bus (
   // takes one cycle: M_CAM is that extra cycle.
   logic [10:0] cam_addr_q;
   logic [10:0] cam2_addr_q;
+  logic [19:0] st_l_addr_q, st_r_addr_q;
   assign cam_addr  = cam_addr_q;
   assign cam2_addr = cam2_addr_q;
+  assign st_l_addr = st_l_addr_q;
+  assign st_r_addr = st_r_addr_q;
   assign cam_bank = ~cam_frame[0];   // the frame that just finished
   wire periph_req = (state_q == M_IDLE) && req_valid;
 
@@ -172,6 +183,12 @@ module ares_mmio_bus (
             end else if (sel_cam2 && !req_write && (req_addr[3:2] == 2'd0)) begin
               cam2_addr_q <= req_addr[11:2];
               state_q <= M_CAM2R;
+            end else if (sel_stl && !req_write) begin
+              st_l_addr_q <= req_addr[19:2];
+              state_q <= M_STL;
+            end else if (sel_str && !req_write) begin
+              st_r_addr_q <= req_addr[19:2];
+              state_q <= M_STR;
             end else begin
               if (sel_clint) rsp_data_q <= clint_rdata;
               else if (sel_uart) rsp_data_q <= uart_rdata;
@@ -204,6 +221,14 @@ module ares_mmio_bus (
         end
         M_CAM2R: begin
           rsp_data_q <= {16'd0, cam2_data};
+          state_q <= M_RESP;
+        end
+        M_STL: begin
+          rsp_data_q <= {24'd0, st_l_data};
+          state_q <= M_RESP;
+        end
+        M_STR: begin
+          rsp_data_q <= {24'd0, st_r_data};
           state_q <= M_RESP;
         end
         M_RESP: if (rsp_ready) state_q <= M_IDLE;

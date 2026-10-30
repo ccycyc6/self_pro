@@ -28,6 +28,7 @@ module tb_soc;
     .gpio_in, .gpio_out, .gpio_dir,
     .cam_addr, .cam_bank, .cam_data, .cam_frame, .cam_wrcnt, .cam_dbg,
     .cam2_addr, .cam2_data(16'd0), .cam2_frame(32'd0),
+    .st_l_addr(), .st_l_data(8'd0), .st_r_addr(), .st_r_data(8'd0),
     .osd_boxes, .osd_tog, .osd_text,
     .mt_irq, .dbg_halt, .dbg_pc, .dbg_commit,
     .dbg_pc_f, .dbg_ifid_valid, .dbg_idex_valid, .dbg_exmem_valid,

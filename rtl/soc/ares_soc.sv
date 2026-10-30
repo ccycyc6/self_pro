@@ -25,6 +25,11 @@ module ares_soc #(
   output logic [10:0] cam2_addr,
   input  logic [15:0] cam2_data,
   input  logic [31:0] cam2_frame,
+  // 320x240 stereo pair (byte images)
+  output logic [31:0] st_l_addr,
+  input  logic [7:0]  st_l_data,
+  output logic [31:0] st_r_addr,
+  input  logic [7:0]  st_r_data,
   output logic        cam_bank,
   input  logic [15:0] cam_data,
   input  logic [31:0] cam_frame,
@@ -134,6 +139,7 @@ module ares_soc #(
     .uart_tx, .uart_rx, .gpio_in, .gpio_out, .gpio_dir,
     .cam_addr, .cam_bank, .cam_data, .cam_frame, .cam_wrcnt, .cam_dbg,
     .cam2_addr, .cam2_data, .cam2_frame,
+    .st_l_addr, .st_l_data, .st_r_addr, .st_r_data,
     .osd_boxes, .osd_tog, .osd_text
   );
 endmodule
