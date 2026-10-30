@@ -17,7 +17,12 @@ module video_capture_wrap #(
     // video_dvp_rgb565 packs them as {first,second} = {B,G,R}, so the validated
     // vendor/Gowin mapping {d[4:0],d[10:5],d[15:11]} gives {R,G,B}.
     // Set to 0 only for a sensor configured RGB-first.
-    parameter integer RGB_SWAP = 1
+    parameter integer RGB_SWAP = 1,
+    // The vendor power-on sequencer ends in a register that PDS maps onto the
+    // constant VCC net, so two instances of this wrapper collide on that net
+    // ("_$$_VCC_$$_ has multiple drivers").  Only the first camera runs the
+    // sequencer; the second just follows the system reset.
+    parameter integer USE_POWER_ON = 1
 ) (
     input  wire        clk_27m,
     input  wire        clk_cam,
@@ -57,14 +62,24 @@ module video_capture_wrap #(
     wire camera_pwnd_unused;
     wire initial_en_unused;
 
-    power_on_delay u_power (
-        .clk_50M      (clk_27m),
-        .reset_n      (~rst_sys),
-        .camera1_rstn (cam_reset_i),
-        .camera2_rstn (),
-        .camera_pwnd  (camera_pwnd_unused),
-        .initial_en   (initial_en_unused)
-    );
+    generate
+    if (USE_POWER_ON != 0) begin : g_power
+        power_on_delay u_power (
+            .clk_50M      (clk_27m),
+            .reset_n      (~rst_sys),
+            .camera1_rstn (cam_reset_i),
+            .camera2_rstn (),
+            .camera_pwnd  (camera_pwnd_unused),
+            .initial_en   (initial_en_unused)
+        );
+    end else begin : g_nopower
+        // cmos2's reset follows the system reset; the sequencer is not needed
+        // because cmos1 (which runs it) powers both sensors from the same rail.
+        assign cam_reset_i      = ~rst_sys;
+        assign camera_pwnd_unused = 1'b0;
+        assign initial_en_unused  = 1'b1;
+    end
+    endgenerate
 
     reg_config u_reg_config (
         .clk_25M      (clk_cam),

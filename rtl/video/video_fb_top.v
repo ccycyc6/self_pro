@@ -667,7 +667,10 @@ module video_fb_top #(
     wire        cam2_fifo_empty, cam2_fifo_rd_en;
     wire [27:0] cam2_fifo_word;
 
-    video_capture_wrap u_capture2 (
+    video_capture_wrap #(
+        .RGB_SWAP    (1),
+        .USE_POWER_ON(0)
+    ) u_capture2 (
         .clk_27m      (clk_27m),
         .clk_cam      (clk_cam),
         .rst_sys      (rst_sys),
