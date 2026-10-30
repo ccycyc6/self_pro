@@ -44,6 +44,7 @@ int mt_drain(void)
 
     if ((status & (MT_ST_ERR | MT_ST_ACCEPT_ERR | MT_ST_KICK_ERR)) != 0u)
     {
+        printf("mt: status=0x%08x\n", (unsigned)status);
         return -3;
     }
 

@@ -90,10 +90,18 @@ module mt_cvxif_shim #(
   logic [7:0]  wait_q;
 
   // Burst support: row steps staged per layer, repeat counter per command.
-  logic [7:0]  stg_a_step, stg_b_step, stg_c_step;   // written via IDX_BSTEP
+  logic [7:0]  stg_a_step, stg_b_step, stg_c_step, stg_d_step;  // IDX_BSTEP
   logic [7:0]  rep_q;                                // repeats left - 1
   logic [7:0]  rep_stg;                              // repeats of the next push
-  logic [7:0]  a_step_q, b_step_q, c_step_q;         // latched with the command
+  logic [7:0]  a_step_q, b_step_q, c_step_q, d_step_q; // latched with the command
+
+  // Two-dimensional burst (GEMM2D): the convolution inner loop is a u x j grid
+  // -- u walks the tile columns (A row +1, C row +4), j walks the output groups
+  // inside a tile column (weight row +1, C row fixed).  Flat bursts cannot
+  // express that, so a second pair of counters lives here.
+  logic        is2d_q;
+  logic [7:0]  u_q, j_q, nj_q;
+  logic [31:0] rs1_u_q, rs2_u_q;
 
   logic [31:0] result_data_q;
   logic        done_q, err_q, accept_err_q, kick_err_q;
@@ -103,9 +111,9 @@ module mt_cvxif_shim #(
   // ---------------------------------------------------------------------------
   wire         fifo_full, fifo_empty;
   wire [31:0]  fifo_count;
-  wire [127:0] fifo_head;
+  wire [135:0] fifo_head;
   wire         fifo_push, fifo_pop;
-  wire [127:0] fifo_push_data;
+  wire [135:0] fifo_push_data;
 
   // Entry layout, MSB first: {rep, c_step, b_step, a_step, rs2, rs1, instr}
   wire [31:0] fifo_head_instr = fifo_head[31:0];
@@ -115,8 +123,9 @@ module mt_cvxif_shim #(
   wire [7:0]  fifo_head_b     = fifo_head[111:104];
   wire [7:0]  fifo_head_c     = fifo_head[119:112];
   wire [7:0]  fifo_head_rep   = fifo_head[127:120];
+  wire [7:0]  fifo_head_d     = fifo_head[135:128];
 
-  assign fifo_push_data = {rep_stg, stg_c_step, stg_b_step, stg_a_step,
+  assign fifo_push_data = {stg_d_step, rep_stg, stg_c_step, stg_b_step, stg_a_step,
                            stg_rs2_q, stg_rs1_q, stg_instr_q};
 
   wire kick = reg_wr_en && (reg_wr_idx == IDX_KICK) && reg_wr_data[0];
@@ -127,7 +136,7 @@ module mt_cvxif_shim #(
 
   mt_cmd_fifo #(
     .DEPTH(FIFO_DEPTH),
-    .WIDTH(128)
+    .WIDTH(136)
   ) u_cmd_fifo (
     .clk,
     .rst,
@@ -140,9 +149,12 @@ module mt_cvxif_shim #(
     .count(fifo_count)
   );
 
-  // The rd field of a GEMM instruction carries the repeat count; every other
-  // instruction leaves it zero and is issued once.
-  assign rep_stg = stg_instr_q[11:7];
+  // GEMM2D: funct7 0x09, nu in rs1[23:16], nj in rs1[31:24]; the rows keep
+  // their usual bytes.  Any other instruction with a non-zero rd field is a
+  // flat burst.
+  wire        is2d_stg = (stg_instr_q[31:25] == 7'h09);
+  wire        is2d_head = (fifo_head_instr[31:25] == 7'h09);
+  assign rep_stg = is2d_stg ? 8'd0 : stg_instr_q[11:7];
 
   assign status      = {27'd0, kick_err_q, accept_err_q, err_q, done_q, busy};
   assign result_data = result_data_q;
@@ -186,12 +198,20 @@ module mt_cvxif_shim #(
       accept_err_q <= 1'b0;
       kick_err_q   <= 1'b0;
       rep_q        <= 8'd0;
+      is2d_q       <= 1'b0;
+      u_q          <= 8'd0;
+      j_q          <= 8'd0;
+      nj_q         <= 8'd1;
+      rs1_u_q      <= 32'd0;
+      rs2_u_q      <= 32'd0;
       a_step_q     <= 8'd0;
       b_step_q     <= 8'd0;
       c_step_q     <= 8'd0;
       stg_a_step   <= 8'd0;
       stg_b_step   <= 8'd0;
       stg_c_step   <= 8'd0;
+      stg_d_step   <= 8'd0;
+      d_step_q     <= 8'd0;
     end else begin
       if (reg_wr_en) begin
         case (reg_wr_idx)
@@ -202,6 +222,7 @@ module mt_cvxif_shim #(
             stg_a_step <= reg_wr_data[7:0];
             stg_b_step <= reg_wr_data[15:8];
             stg_c_step <= reg_wr_data[23:16];
+            stg_d_step <= reg_wr_data[31:24];
           end
           default:   ;  // KICK is consumed below
         endcase
@@ -228,14 +249,28 @@ module mt_cvxif_shim #(
       case (state_q)
         S_IDLE: begin
           if (!fifo_empty) begin
-            instr_q  <= fifo_head_instr;
+            // A 2D command is a macro: the tensor only ever sees plain GEMMs.
+            instr_q  <= is2d_head ? {7'h05, fifo_head_instr[24:0]}
+                                  : fifo_head_instr;
             rs1_q    <= fifo_head_rs1;
             rs2_q    <= fifo_head_rs2;
             a_step_q <= fifo_head_a;
             b_step_q <= fifo_head_b;
             c_step_q <= fifo_head_c;
+            d_step_q <= fifo_head_d;
             // rep is the number of issues, rep_q counts the ones still to do.
             rep_q    <= (fifo_head_rep == 8'd0) ? 8'd0 : (fifo_head_rep - 8'd1);
+
+            // Shape: nu in the instruction's rs1 field, nj in its rs2 field.
+            is2d_q  <= (fifo_head_instr[31:25] == 7'h09);
+            u_q     <= ({3'd0, fifo_head_instr[19:15]} == 8'd0) ? 8'd0
+                      : ({3'd0, fifo_head_instr[19:15]} - 8'd1);
+            nj_q    <= ({3'd0, fifo_head_instr[24:20]} == 8'd0) ? 8'd1
+                      : {3'd0, fifo_head_instr[24:20]};
+            j_q     <= ({3'd0, fifo_head_instr[24:20]} == 8'd0) ? 8'd0
+                      : ({3'd0, fifo_head_instr[24:20]} - 8'd1);
+            rs1_u_q <= fifo_head_rs1;
+            rs2_u_q <= fifo_head_rs2;
             id_q     <= id_q + 4'd1;
             state_q  <= S_ISSUE;
           end
@@ -277,8 +312,27 @@ module mt_cvxif_shim #(
             err_q         <= err_q | xif_rsp.result_err;
             result_data_q <= xif_rsp.result_data;
 
-            if (rep_q != 8'd0) begin
-              // Burst: issue the same instruction again with the rows moved on.
+            if (is2d_q && (j_q != 8'd0)) begin
+              // Inner step: next output group.  The weight row advances by
+              // b_step and the C row by d_step (one output group's worth of
+              // columns), which is what the scalar loop did per group.
+              j_q     <= j_q - 8'd1;
+              rs1_q   <= rs1_q + {b_step_q, 8'd0};
+              rs2_q   <= rs2_q + {24'd0, d_step_q};
+              id_q    <= id_q + 4'd1;
+              state_q <= S_ISSUE;
+            end else if (is2d_q && (u_q != 8'd0)) begin
+              // Outer step: next tile column, A row +a_step, C row +c_step.
+              u_q     <= u_q - 8'd1;
+              j_q     <= (nj_q == 8'd0) ? 8'd0 : (nj_q - 8'd1);
+              rs1_u_q <= rs1_u_q + {8'd0, a_step_q};
+              rs2_u_q <= rs2_u_q + {24'd0, c_step_q};
+              rs1_q   <= rs1_u_q + {8'd0, a_step_q};
+              rs2_q   <= rs2_u_q + {24'd0, c_step_q};
+              id_q    <= id_q + 4'd1;
+              state_q <= S_ISSUE;
+            end else if (!is2d_q && (rep_q != 8'd0)) begin
+              // Flat burst: issue the same instruction again with the rows moved on.
               rep_q   <= rep_q - 8'd1;
               rs1_q   <= rs1_q + {b_step_q, a_step_q};
               rs2_q   <= rs2_q + {24'd0, c_step_q};

@@ -200,9 +200,10 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                     uint32_t qbase = (((((kx * ng) + g) * PH) + ky) * ntiles) + hrow;
                     uint32_t wb = UB_WT + ((q - tc) * njt);
 
-                    /* Re-arm the GEMM burst steps: A row fixed, weight row and
-                     * C row advance by one and ntiles4. */
-                    MT_SET_STEPS(0u, 1u, ntiles4);
+                    /* Re-arm the GEMM steps: per column the A row advances by
+                     * one and the C row by four; per output group the weight
+                     * row by one. */
+                    MT_SET_STEPS4(1u, 1u, 4u, ntiles4);
 
                     /* UB_A holds four activation rows and consecutive tiles are
                      * contiguous in memory, so one DMA brings in four tiles'
@@ -218,20 +219,19 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                                           MT_ROWS(UB_A, n))) != 0) return rc;
                         count++;
 
-                        for (u = 0; u < n; u++)
+                        /* One push covers the whole u x j grid of this tile
+                         * group: the shim walks the columns (A row +1, C row
+                         * +4) and the output groups inside a column (weight
+                         * row +1).  The C row starts at the group's first
+                         * column, exactly as the scalar version did. */
                         {
-                            /* One push covers the whole output-group run: the
-                             * shim repeats the GEMM and adds MT_BSTEP between
-                             * issues.  The first tap of the output overwrites C
-                             * and every later tap accumulates, which depends on
-                             * the tap only. */
-                            uint32_t crow0 = UB_C + ((t + u) * 4u);
-                            uint32_t rs1 = MT_GEMM_RS1(UB_A + u, wb);
+                            uint32_t crow0 = UB_C + (t * 4u);
+                            uint32_t rs1 = MT_GEMM_RS1(UB_A, wb);
                             uint32_t rs2 = MT_GEMM_RS2(crow0,
                                                        (tc == 0u && q == tc)
                                                            ? 0u : 1u);
 
-                            if ((rc = mt_push(MT_GEMM_BURST(njt), rs1, rs2)) != 0)
+                            if ((rc = mt_push(MT_GEMM2D(n, njt), rs1, rs2)) != 0)
                                 return rc;
                             count++;
                         }

@@ -64,12 +64,30 @@ static inline uint32_t mt_enc(uint32_t funct7, uint32_t funct3, uint32_t rd)
 #define MT_BURST(instr, n) ((instr) | ((((uint32_t)(n)) & 0x1Fu) << 7))
 #define MT_GEMM_BURST(n)   MT_BURST(MT_GEMM, (n))
 
+/* Two-dimensional GEMM burst: nu tile columns x nj output groups, all in one
+ * push.  The shim steps the A row and the C row per column, and the weight row
+ * per group.  nu/nj ride in the spare upper bytes of rs1. */
+/* The shape rides in the instruction's unused rs1/rs2 fields (5 bits each) so
+ * that the rs1/rs2 operands the tensor validates stay clean -- it rejects a
+ * GEMM whose rs1[31:16] is not zero. */
+#define MT_GEMM2D(nu, nj) (mt_enc(0x09u, 0x0u, 0u) | \
+                           ((((uint32_t)(nj)) & 0x1Fu) << 20) | \
+                           ((((uint32_t)(nu)) & 0x1Fu) << 15))
+
 /* Row steps for the next burst: a and b live in rs1's two bytes, c in rs2's
  * low byte. */
 #define MT_SET_STEPS(a, b, c) \
     MT_MMIO32(MT_BSTEP) = ((uint32_t)(a) & 0xFFu) | \
                           (((uint32_t)(b) & 0xFFu) << 8) | \
                           (((uint32_t)(c) & 0xFFu) << 16)
+
+/* Same, with the fourth step used by the two-dimensional burst: the C row
+ * advance between output groups inside one tile column. */
+#define MT_SET_STEPS4(a, b, c, d) \
+    MT_MMIO32(MT_BSTEP) = ((uint32_t)(a) & 0xFFu) | \
+                          (((uint32_t)(b) & 0xFFu) << 8) | \
+                          (((uint32_t)(c) & 0xFFu) << 16) | \
+                          (((uint32_t)(d) & 0xFFu) << 24)
 #define MT_EPILOGUE  mt_enc(0x06u, 0x0u, 0u)   /* 0000110: requant+pack   */
 
 /* rs2 for MT_LOAD / MT_STORE: [7:0] UB start row, [15:8] row count (never 0). */
