@@ -163,7 +163,10 @@ module mt_cvxif_shim #(
   wire        is_pair_head = (fifo_head_instr[31:25] == 7'h0A);
   assign rep_stg = is2d_stg ? 8'd0 : stg_instr_q[11:7];
 
-  assign status      = {27'd0, kick_err_q, accept_err_q, err_q, done_q, busy};
+  // bit 5 tells the driver the queue has no room, so it can wait for one slot
+  // instead of waiting for the whole queue to drain.
+  assign status      = {26'd0, fifo_full, kick_err_q, accept_err_q, err_q,
+                        done_q, busy};
   assign result_data = result_data_q;
 
   // ---------------------------------------------------------------------------

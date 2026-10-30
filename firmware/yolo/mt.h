@@ -35,6 +35,7 @@
 #define MT_ST_ERR        (1u << 2)   /* operand rejected after commit */
 #define MT_ST_ACCEPT_ERR (1u << 3)   /* unsupported funct7/funct3 */
 #define MT_ST_KICK_ERR   (1u << 4)   /* kick dropped: queue was full */
+#define MT_ST_FULL       (1u << 5)   /* no room: wait before pushing    */
 
 /* Scratch buffer: 64 KiB at 0x1000_0000 (L2 scratchpad). */
 #define MT_BUF_BASE    0x10000000u
@@ -159,15 +160,20 @@ int mt_drain(void);
 
 static inline int mt_push(uint32_t instr, uint32_t rs1, uint32_t rs2)
 {
+    /* Wait only for room, not for the whole queue to drain: the hardware
+     * reports "full" so the CPU can run right behind it.  Errors are collected
+     * by the layer's final mt_drain(). */
+    while ((MT_MMIO32(MT_STATUS) & MT_ST_FULL) != 0u)
+    {
+        /* spin: the accelerator is consuming */
+    }
+
     MT_MMIO32(MT_INSTR) = instr;
     MT_MMIO32(MT_RS1)   = rs1;
     MT_MMIO32(MT_RS2)   = rs2;
     MT_MMIO32(MT_KICK)  = 1u;
 
-    if (++mt_queued >= MT_BATCH)
-    {
-        return mt_drain();
-    }
+    mt_queued++;
     return 0;
 }
 
