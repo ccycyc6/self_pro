@@ -147,61 +147,87 @@ static void track_bright(const uint8_t *img, int *bx, int *by,
     }
 }
 
-/* "XXX:YYY" on screen: the top-left corner of the box in display pixels, so
- * it can be compared with the picture directly. */
-static void publish_text(uint32_t x0, uint32_t y0)
+/* "n vv" on screen: how many targets the model found and the strongest cell
+ * score, so the readout matches what the boxes show. */
+static void publish_text(int count, int peak)
 {
     uint32_t v[8];
     int i;
 
-    v[0] = (x0 / 100u) % 10u;
-    v[1] = (x0 / 10u) % 10u;
-    v[2] = x0 % 10u;
-    v[3] = GLYPH_COLON;
-    v[4] = (y0 / 100u) % 10u;
-    v[5] = (y0 / 10u) % 10u;
-    v[6] = y0 % 10u;
+    v[0] = (uint32_t)count;
+    v[1] = GLYPH_SPACE;
+    v[2] = (uint32_t)((peak / 10) % 10);
+    v[3] = (uint32_t)(peak % 10);
+    v[4] = GLYPH_SPACE;
+    v[5] = GLYPH_SPACE;
+    v[6] = GLYPH_SPACE;
     v[7] = GLYPH_SPACE;
 
     for (i = 0; i < 8; i++)
         ares_mmio_write(OSD_TEXT_BASE + (uint32_t)i * 4u, v[i]);
 }
 
-static void publish_box(int gx, int gy, int visible)
+/* Publish up to four boxes.  A box is drawn while x1 > x0, so hiding one is
+ * just writing zeros.  The commit write flips the toggle the OSD syncs to. */
+static void publish_boxes(int n, const int *px, const int *py)
 {
-    uint32_t x0 = (uint32_t)(320 + gx * 80);
-    uint32_t y0 = (uint32_t)(40 + gy * 80);
+    int i;
 
-    ares_mmio_write(OSD_BOX_BASE + 0u, x0);
-    ares_mmio_write(OSD_BOX_BASE + 4u, y0);
-    ares_mmio_write(OSD_BOX_BASE + 8u, x0 + 80u);
-    ares_mmio_write(OSD_BOX_BASE + 12u, y0 + 80u);
-    ares_mmio_write(OSD_BOX_BASE + 16u, visible ? 1u : 0u);
-}
+    for (i = 0; i < 4; i++) {
+        uint32_t off = OSD_BOX_BASE + (uint32_t)i * 16u;
+        uint32_t x0 = 0u, y0 = 0u;
 
-/* Temporal stability.  The head answers on an 8x8 grid, so at distance a single
- * frame easily flips to a neighbouring cell and the box looks like it is
- * jumping.  A new cell must win twice before the box moves, and the previous
- * box survives a few frames without a detection. */
-static int hold_x = -1, hold_y = -1;
-static int cand_x = -1, cand_y = -1, cand_n = 0;
-static int lost_n = 0;
-
-static void track_filter(int *cx, int *cy)
-{
-    if (hold_x < 0) {          /* first detection after reset: adopt it */
-        hold_x = *cx;
-        hold_y = *cy;
-        cand_n = 0;
-        return;
+        if (i < n) {
+            x0 = (uint32_t)(320 + px[i] * 80);
+            y0 = (uint32_t)(40 + py[i] * 80);
+        }
+        ares_mmio_write(off + 0u, x0);
+        ares_mmio_write(off + 4u, y0);
+        ares_mmio_write(off + 8u, x0 + 80u);
+        ares_mmio_write(off + 12u, y0 + 80u);
     }
-    /* Confirm with a single frame: two-frame confirmation made the box feel
-     * laggy (2 x 41 ms).  Jitter is fought at the source instead, by averaging
-     * 4x4 samples per thumbnail cell in cam_cap. */
-    (void)cand_x; (void)cand_y; (void)cand_n;
-    hold_x = *cx;
-    hold_y = *cy;
+    ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
 }
+
+/* Peak picking on the 8x8 object map: take the strongest cell, blank its 3x3
+ * neighbourhood, repeat.  Adjacent cells of one object therefore collapse into
+ * a single box. */
+#define PEAK_MIN 20
+
+static int pick_peaks(const int8_t *m, int *px, int *py, int maxn)
+{
+    int8_t work[64];
+    int i, k, n = 0;
+
+    for (i = 0; i < 64; i++) work[i] = m[i];
+
+    for (k = 0; k < maxn; k++) {
+        int best = -128, bi = -1;
+        int dy, dx;
+
+        for (i = 0; i < 64; i++)
+            if (work[i] > best) { best = work[i]; bi = i; }
+        if (bi < 0 || best < PEAK_MIN) break;
+
+        px[n] = bi & 7;
+        py[n] = bi >> 3;
+        n++;
+
+        for (dy = -1; dy <= 1; dy++)
+            for (dx = -1; dx <= 1; dx++) {
+                int yy = py[n - 1] + dy, xx = px[n - 1] + dx;
+                if (yy >= 0 && yy < 8 && xx >= 0 && xx < 8)
+                    work[yy * 8 + xx] = -128;
+            }
+    }
+    return n;
+}
+
+/* Multi-object state: the last set of peaks, kept for a few frames so a
+ * missed detection does not make every box blink at once. */
+static int    hold_px[4], hold_py[4], hold_n = 0;
+static int    lost_n = 0;
+static int8_t obj_map[64];
 
 static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
 {
@@ -230,8 +256,9 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
 
     for (gy = 0; gy < 8; gy++) {
         for (gx = 0; gx < 8; gx++) {
-            int32_t v = (int8_t)rd8(MID_BUF + (((uint32_t)gy * 8u +
-                                                (uint32_t)gx) * 4u));
+            int8_t v = (int8_t)rd8(MID_BUF + (((uint32_t)gy * 8u +
+                                               (uint32_t)gx) * 4u));
+            obj_map[gy * 8 + gx] = v;
             if (v > 0) { sum += v; sy += v * gy; sx += v * gx; }
         }
     }
@@ -240,30 +267,35 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
     dma_stall = ARES_MMIO32(0xE0000018u) - p0d;
     busy      = ARES_MMIO32(0xE000001Cu) - p0b;
 
-    if (sum > 0) {
-        int cx = (int)((sx * 10) / sum) / 10;
-        int cy = (int)((sy * 10) / sum) / 10;
+    {
+        int px[4], py[4];
+        int n = pick_peaks(obj_map, px, py, 4);
 
-        lost_n = 0;
-        track_filter(&cx, &cy);
-        publish_text((uint32_t)(320 + cx * 80), (uint32_t)(40 + cy * 80));
-        publish_box(cx, cy, 1);
-        printf("  net: cell=(%d,%d) t=%u busy=%u\n",
-               cx, cy, (unsigned)hot, (unsigned)busy);
-    } else if (hold_x >= 0 && lost_n < 6) {
-        /* Brief dropouts are common at distance; keep the box where it was
-         * instead of blinking it out. */
-        lost_n++;
-        publish_box(hold_x, hold_y, 1);
-        printf("  net: hold cell=(%d,%d) t=%u busy=%u\n",
-               hold_x, hold_y, (unsigned)hot, (unsigned)busy);
-    } else {
-        hold_x = -1;
-        hold_y = -1;
-        cand_n = 0;
-        publish_box(0, 0, 0);
-        printf("  net: no detection t=%u busy=%u\n",
-               (unsigned)hot, (unsigned)busy);
+        if (n > 0) {
+            int i;
+            lost_n = 0;
+            for (i = 0; i < n; i++) { hold_px[i] = px[i]; hold_py[i] = py[i]; }
+            hold_n = n;
+            publish_text(n, obj_map[py[0] * 8 + px[0]] & 0x7F);
+            publish_boxes(n, px, py);
+            printf("  net: %d target(s) at (%d,%d)", n, px[0], py[0]);
+            if (n > 1) printf(" (%d,%d)", px[1], py[1]);
+            if (n > 2) printf(" (%d,%d)", px[2], py[2]);
+            if (n > 3) printf(" (%d,%d)", px[3], py[3]);
+            printf(" t=%u busy=%u\n", (unsigned)hot, (unsigned)busy);
+        } else if (hold_n > 0 && lost_n < 6) {
+            /* brief dropouts: keep the last set instead of blinking out */
+            lost_n++;
+            publish_boxes(hold_n, hold_px, hold_py);
+            printf("  net: hold %d target(s) t=%u busy=%u\n",
+                   hold_n, (unsigned)hot, (unsigned)busy);
+        } else {
+            hold_n = 0;
+            publish_text(0, 0);
+            publish_boxes(0, px, py);
+            printf("  net: no detection t=%u busy=%u\n",
+                   (unsigned)hot, (unsigned)busy);
+        }
     }
 }
 

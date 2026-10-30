@@ -38,28 +38,50 @@ def draw(x, top, left, rgb, size):
 
 
 def make_batch(n, rng):
+    """1..3 red targets per frame, every one labelled in the object channel.
+
+    The head answers per cell, so several targets are just several hot cells; the
+    firmware picks the peaks.  Distractors keep the colour discrimination honest.
+    """
     x = np.zeros((n, H, W, C_IN), np.float32)
     y = np.zeros((n, GRID, GRID, 3), np.float32)
     for i in range(n):
-        size = int(rng.integers(SIZE_MIN, SIZE_MAX + 1))
-        top, left = rng_box(rng, size)
-        gain = float(rng.uniform(0.45, 1.0))
-        draw(x[i], top, left, tuple(c * gain for c in TARGET_RGB), size)
+        ntgt = int(rng.integers(1, 4))
+        boxes = []
+        tries = 0
+        while len(boxes) < ntgt and tries < 40:
+            tries += 1
+            size = int(rng.integers(SIZE_MIN, SIZE_MAX + 1))
+            top, left = rng_box(rng, size)
+            if any(abs(top - t) < size + 2 and abs(left - l) < size + 2
+                   for t, l, _ in boxes):
+                continue
+            gain = float(rng.uniform(0.45, 1.0))
+            draw(x[i], top, left, tuple(c * gain for c in TARGET_RGB), size)
+            boxes.append((top, left, size))
+
         for _ in range(3):
             ds = int(rng.integers(SIZE_MIN, SIZE_MAX + 1))
             dt, dl = rng_box(rng, ds)
-            if abs(dt - top) < size + 2 and abs(dl - left) < size + 2:
+            if any(abs(dt - t) < ds + 2 and abs(dl - l) < ds + 2 for t, l, _ in boxes):
                 continue
             col = DISTRACTORS[int(rng.integers(0, len(DISTRACTORS)))]
             draw(x[i], dt, dl, tuple(c * float(rng.uniform(0.4, 1.0)) for c in col), ds)
+
         for cy in range(GRID):
             for cx in range(GRID):
                 r0, c0 = cy * CELL, cx * CELL
-                dh = max(0, min(top + size, r0 + CELL) - max(top, r0))
-                dw = max(0, min(left + size, c0 + CELL) - max(left, c0))
-                y[i, cy, cx, 0] = 1.0 if (dh * dw) >= (CELL * CELL) // 2 else 0.0
-        y[i, :, :, 1] = size / H
-        y[i, :, :, 2] = size / W
+                hit = 0.0
+                for top, left, size in boxes:
+                    dh = max(0, min(top + size, r0 + CELL) - max(top, r0))
+                    dw = max(0, min(left + size, c0 + CELL) - max(left, c0))
+                    if (dh * dw) >= (CELL * CELL) // 2:
+                        hit = 1.0
+                y[i, cy, cx, 0] = hit
+        if boxes:
+            s = float(boxes[0][2])
+            y[i, :, :, 1] = s / H
+            y[i, :, :, 2] = s / W
     x += rng.normal(0.0, 3.0 / 255.0, x.shape).astype(np.float32)
     np.clip(x, 0.0, 1.0, out=x)
     return x, y

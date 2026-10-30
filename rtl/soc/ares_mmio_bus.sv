@@ -34,12 +34,10 @@ module ares_mmio_bus (
   input  logic [23:0] cam_dbg,
 
   // Detector box for the OSD (0xD000_4000 + n*4, write only)
-  output logic [11:0] osd_x0,
-  output logic [11:0] osd_y0,
-  output logic [11:0] osd_x1,
-  output logic [11:0] osd_y1,
-  output logic        osd_valid,
-  output logic        osd_tog,
+  // Four boxes, 48 bits each: {x1, y1, x0, y0}.  A box is drawn while x1 > x0,
+  // so the driver hides one by writing zeros.
+  output logic [191:0] osd_boxes,
+  output logic         osd_tog,
 
   // On-screen text: 8 glyph indices, written as 8 words at 0xD000_5000.
   output logic [39:0] osd_text
@@ -58,29 +56,42 @@ module ares_mmio_bus (
   wire sel_osd    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h4);
   wire sel_text   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h5);
 
+  // 0xD000_4000 + box*0x10 + word*4 : box coordinates (word 0..3 = x0,y0,x1,y1)
+  // 0xD000_4040                     : commit (flips the OSD toggle)
+  wire [1:0] box_idx  = req_addr[5:4];
+  wire [1:0] box_word = req_addr[3:2];
+
   // ------------------------------------------------------------- OSD mailbox
   // 0x4000..0x400C hold the box, 0x4010 commits it (bit 0 = visible) by
   // flipping a toggle that the pixel clock domain synchronises.
   always_ff @(posedge clk) begin
     if (rst) begin
-      osd_x0 <= 12'd0;
-      osd_y0 <= 12'd0;
-      osd_x1 <= 12'd0;
-      osd_y1 <= 12'd0;
-      osd_valid <= 1'b0;
+      osd_boxes <= 192'd0;
       osd_tog   <= 1'b0;
     end else if (periph_req && req_write && sel_osd) begin
-      case (req_addr[5:2])
-        4'd0: osd_x0 <= req_wdata[11:0];
-        4'd1: osd_y0 <= req_wdata[11:0];
-        4'd2: osd_x1 <= req_wdata[11:0];
-        4'd3: osd_y1 <= req_wdata[11:0];
-        4'd4: begin
-          osd_valid <= req_wdata[0];
-          osd_tog   <= ~osd_tog;
-        end
-        default: ;
-      endcase
+      if (req_addr[7:6] == 2'b01) begin
+        // 0x4040: commit -- flip the toggle the pixel domain synchronises
+        osd_tog <= ~osd_tog;
+      end else begin
+        case ({box_idx, box_word})
+          4'd0:  osd_boxes[11:0]   <= req_wdata[11:0];   // box0 x0
+          4'd1:  osd_boxes[23:12]  <= req_wdata[11:0];   // box0 y0
+          4'd2:  osd_boxes[35:24]  <= req_wdata[11:0];   // box0 x1
+          4'd3:  osd_boxes[47:36]  <= req_wdata[11:0];   // box0 y1
+          4'd4:  osd_boxes[59:48]  <= req_wdata[11:0];
+          4'd5:  osd_boxes[71:60]  <= req_wdata[11:0];
+          4'd6:  osd_boxes[83:72]  <= req_wdata[11:0];
+          4'd7:  osd_boxes[95:84]  <= req_wdata[11:0];
+          4'd8:  osd_boxes[107:96] <= req_wdata[11:0];
+          4'd9:  osd_boxes[119:108] <= req_wdata[11:0];
+          4'd10: osd_boxes[131:120] <= req_wdata[11:0];
+          4'd11: osd_boxes[143:132] <= req_wdata[11:0];
+          4'd12: osd_boxes[155:144] <= req_wdata[11:0];
+          4'd13: osd_boxes[167:156] <= req_wdata[11:0];
+          4'd14: osd_boxes[179:168] <= req_wdata[11:0];
+          default: osd_boxes[191:180] <= req_wdata[11:0];
+        endcase
+      end
     end else if (periph_req && req_write && sel_text) begin
       case (req_addr[4:2])
         3'd0: osd_text[4:0]   <= req_wdata[4:0];

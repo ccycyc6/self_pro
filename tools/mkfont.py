@@ -66,7 +66,7 @@ out.append("    always @(*) begin")
 out.append("        case ({ch, row})")
 for i, c in enumerate(CHARS):
     for r, v in enumerate(glyph(c)):
-        out.append("            10'd%d: bits = 8'h%02X;   // '%s' row %d" % (i * 8 + r, v, c, r))
+        out.append("            8'd%d: bits = 8'h%02X;   // '%s' row %d" % (i * 8 + r, v, c, r))
 out.append("            default: bits = 8'h00;")
 out.append("        endcase")
 out.append("    end")

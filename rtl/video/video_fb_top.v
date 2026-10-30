@@ -115,9 +115,9 @@ module video_fb_top #(
     wire [7:0]  hdmi_r, hdmi_g, hdmi_b;
 
     // ------------------------------------------- detector box (SoC mailbox)
-    wire [11:0] osd_x0_w, osd_y0_w, osd_x1_w, osd_y1_w;
-    wire        osd_valid_w, osd_tog_w;
-    wire [39:0] osd_text_w;
+    wire [191:0] osd_boxes_w;
+    wire         osd_tog_w;
+    wire [39:0]  osd_text_w;
 
     video_hdmi_wrap #(
         .USE_EXT_DE     (1)
@@ -151,11 +151,7 @@ module video_fb_top #(
         .x         (hdmi_x_act),
         .y         (hdmi_y_act),
         .de        (de_out),
-        .box_x0    (osd_x0_w),
-        .box_y0    (osd_y0_w),
-        .box_x1    (osd_x1_w),
-        .box_y1    (osd_y1_w),
-        .box_valid (osd_valid_w),
+        .boxes     (osd_boxes_w),
         .box_tog   (osd_tog_w),
         .text_chars(osd_text_w),
         .r_in      (hdmi_r),
@@ -759,11 +755,7 @@ module video_fb_top #(
         .cam_frame       (cam_frame_w),
         .cam_wrcnt       (cam_wrcnt_s2),
         .cam_dbg         (cam_dbg_s2),
-        .osd_x0          (osd_x0_w),
-        .osd_y0          (osd_y0_w),
-        .osd_x1          (osd_x1_w),
-        .osd_y1          (osd_y1_w),
-        .osd_valid       (osd_valid_w),
+        .osd_boxes       (osd_boxes_w),
         .osd_tog         (osd_tog_w),
         .osd_text        (osd_text_w),
         .mt_irq          (),
@@ -785,7 +777,7 @@ module video_fb_top #(
     assign osd_y0_w    = 12'd0;
     assign osd_x1_w    = 12'd0;
     assign osd_y1_w    = 12'd0;
-    assign osd_valid_w = 1'b0;
+    assign osd_boxes_w = 192'd0;
     assign osd_tog_w   = 1'b0;
     assign osd_text_w  = 40'd0;
 `endif
