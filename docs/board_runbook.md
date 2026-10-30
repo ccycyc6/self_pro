@@ -66,3 +66,37 @@ $sp.Close()
 
 C22 复位键会把 PLL 和 DDR3 IP 一起重启，DDR3 重新校准可能失败导致**黑屏**。
 需要复位时优先用 **JTAG 重新烧写**（等价于一次干净的配置）或断电重启。
+## 6. JTAG 服务起不来：端口被 Windows 保留（2026-10-30 确认）
+
+现象：
+
+    cdt_js : Cannot create listening port: Socket bind error
+    cdt_cfg: E: CdtCommon-0402: Fail to connect to server ...
+             The connection was refused by the peer
+
+原因不是驱动、不是线、不是 PDS 装坏，而是 **Windows 把 65389-65488 这段 TCP 端口
+保留给了 Hyper-V/WSL**，默认的 65420 正好落在里面：
+
+    netsh int ipv4 show excludedportrange protocol=tcp
+      65389  65488
+      65289  65388
+      ...
+
+**解决办法（不需要管理员权限）**：让 cdt_js 和 cdt_cfg 都用保留区之外的端口，例如 60000。
+
+    cdt_js.exe  -port 60000
+    set CDT_JS_PORT=60000
+    cdt_cfg.exe -file fpga\pango\program.tcl -args {<bitstream>}
+
+`fpga/pango/program.tcl` 已改成读 `CDT_JS_PORT`（缺省仍是 65420），
+现成脚本：
+
+    powershell -ExecutionPolicy Bypass -File tools\program_board.ps1 ^
+        -Bitstream build\pango\p1c\generate_bitstream\video_fb_top.sbit
+
+它会自动在 60000 起服务、烧写、检查 done bit（实测 8 秒完成）。
+
+**如果还想让 PDS IDE 里的下载按钮能用**，两个办法：
+
+1. 管理员执行 `net stop winnat` 释放保留段（之后 IDE 用 65420 即可，重启后可能复发）；
+2. 在 IDE 的连接设置里把 JTAG Server 端口改成 60000。
