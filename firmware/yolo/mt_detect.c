@@ -144,6 +144,22 @@ int mt_detect_command(int argc, char **argv)
     }
 #endif
 
+#ifdef MT_UNITTEST
+    /* Three minimal commands, to see exactly which form the tensor rejects. */
+    {
+        uint32_t ub = MT_BUF_BASE;
+        printf("UT load  rc=%d\n",
+               mt_exec(MT_LOAD, ub + 0x1000u, MT_ROWS(UB_A, 4u)));
+        printf("UT gemm2d rc=%d\n",
+               mt_exec(MT_GEMM2D(1u, 1u), MT_GEMM_RS1(UB_A, UB_WT),
+                       MT_GEMM_RS2(UB_C, 0u)));
+        MT_MMIO32(MT_LO) = ub + 0x1000u;
+        printf("UT pair  rc=%d\n",
+               mt_exec(MT_CONVGROUP(4u, 1u), MT_GEMM_RS1(UB_A, UB_WT),
+                       MT_GEMM_RS2(UB_C, 0u)));
+    }
+#endif
+
     mt_reset_status();
     /* Profiling counters are free running; take a snapshot and subtract. */
     perf_dma0 = ARES_MMIO32(0xE0000018u);

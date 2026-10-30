@@ -219,15 +219,10 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                                                    (tc == 0u && q == tc)
                                                        ? 0u : 1u);
 
-                        if ((rc = mt_push(MT_LOAD, B + a_addr,
-                                          MT_ROWS(UB_A, n))) != 0) return rc;
-                        count++;
-
-                        /* One push covers the whole u x j grid of this tile
-                         * group: the shim walks the columns (A row +1, C row
-                         * +4) and the output groups inside a column (weight
-                         * row +1). */
-                        if ((rc = mt_push(MT_GEMM2D(n, njt), rs1, rs2)) != 0)
+                        /* One push covers the LOAD of these activation rows and
+                         * the whole u x j grid that consumes them. */
+                        MT_MMIO32(MT_LO) = B + a_addr;
+                        if ((rc = mt_push(MT_CONVGROUP(n, njt), rs1, rs2)) != 0)
                             return rc;
                         count++;
                     }

@@ -60,6 +60,7 @@ module mt_cvxif_shim #(
   localparam logic [2:0] IDX_RS2   = 3'd2;
   localparam logic [2:0] IDX_KICK  = 3'd3;
   localparam logic [2:0] IDX_BSTEP = 3'd6;   // burst row steps, write-only
+  localparam logic [2:0] IDX_LO    = 3'd7;   // paired LOAD address, write-only
   // 3'd4 = MT_STATUS and 3'd5 = MT_RESULT are read-only.
 
   // A command may carry a repeat count in the instruction's rd field: the shim
@@ -103,6 +104,10 @@ module mt_cvxif_shim #(
   logic [7:0]  u_q, j_q, nj_q;
   logic [31:0] rs1_u_q, rs2_u_q;
 
+  // Paired command (0x0A): issue a LOAD from stg_lo first, then run the 2D grid.
+  logic [31:0] stg_lo_q;
+  logic        lo_first_q;
+
   logic [31:0] result_data_q;
   logic        done_q, err_q, accept_err_q, kick_err_q;
 
@@ -111,22 +116,23 @@ module mt_cvxif_shim #(
   // ---------------------------------------------------------------------------
   wire         fifo_full, fifo_empty;
   wire [31:0]  fifo_count;
-  wire [135:0] fifo_head;
+  wire [167:0] fifo_head;
   wire         fifo_push, fifo_pop;
-  wire [135:0] fifo_push_data;
+  wire [167:0] fifo_push_data;
 
   // Entry layout, MSB first: {rep, c_step, b_step, a_step, rs2, rs1, instr}
   wire [31:0] fifo_head_instr = fifo_head[31:0];
   wire [31:0] fifo_head_rs1   = fifo_head[63:32];
   wire [31:0] fifo_head_rs2   = fifo_head[95:64];
-  wire [7:0]  fifo_head_a     = fifo_head[103:96];
-  wire [7:0]  fifo_head_b     = fifo_head[111:104];
-  wire [7:0]  fifo_head_c     = fifo_head[119:112];
-  wire [7:0]  fifo_head_rep   = fifo_head[127:120];
-  wire [7:0]  fifo_head_d     = fifo_head[135:128];
+  wire [31:0] fifo_head_lo    = fifo_head[127:96];
+  wire [7:0]  fifo_head_a     = fifo_head[135:128];
+  wire [7:0]  fifo_head_b     = fifo_head[143:136];
+  wire [7:0]  fifo_head_c     = fifo_head[151:144];
+  wire [7:0]  fifo_head_d     = fifo_head[159:152];
+  wire [7:0]  fifo_head_rep   = fifo_head[167:160];
 
-  assign fifo_push_data = {stg_d_step, rep_stg, stg_c_step, stg_b_step, stg_a_step,
-                           stg_rs2_q, stg_rs1_q, stg_instr_q};
+  assign fifo_push_data = {rep_stg, stg_d_step, stg_c_step, stg_b_step, stg_a_step,
+                           stg_lo_q, stg_rs2_q, stg_rs1_q, stg_instr_q};
 
   wire kick = reg_wr_en && (reg_wr_idx == IDX_KICK) && reg_wr_data[0];
 
@@ -136,7 +142,7 @@ module mt_cvxif_shim #(
 
   mt_cmd_fifo #(
     .DEPTH(FIFO_DEPTH),
-    .WIDTH(136)
+    .WIDTH(168)
   ) u_cmd_fifo (
     .clk,
     .rst,
@@ -154,6 +160,7 @@ module mt_cvxif_shim #(
   // flat burst.
   wire        is2d_stg = (stg_instr_q[31:25] == 7'h09);
   wire        is2d_head = (fifo_head_instr[31:25] == 7'h09);
+  wire        is_pair_head = (fifo_head_instr[31:25] == 7'h0A);
   assign rep_stg = is2d_stg ? 8'd0 : stg_instr_q[11:7];
 
   assign status      = {27'd0, kick_err_q, accept_err_q, err_q, done_q, busy};
@@ -199,6 +206,8 @@ module mt_cvxif_shim #(
       kick_err_q   <= 1'b0;
       rep_q        <= 8'd0;
       is2d_q       <= 1'b0;
+      lo_first_q   <= 1'b0;
+      stg_lo_q     <= 32'd0;
       u_q          <= 8'd0;
       j_q          <= 8'd0;
       nj_q         <= 8'd1;
@@ -224,6 +233,7 @@ module mt_cvxif_shim #(
             stg_c_step <= reg_wr_data[23:16];
             stg_d_step <= reg_wr_data[31:24];
           end
+          IDX_LO:    stg_lo_q <= reg_wr_data;
           default:   ;  // KICK is consumed below
         endcase
       end
@@ -249,11 +259,17 @@ module mt_cvxif_shim #(
       case (state_q)
         S_IDLE: begin
           if (!fifo_empty) begin
-            // A 2D command is a macro: the tensor only ever sees plain GEMMs.
-            instr_q  <= is2d_head ? {7'h05, fifo_head_instr[24:0]}
-                                  : fifo_head_instr;
-            rs1_q    <= fifo_head_rs1;
-            rs2_q    <= fifo_head_rs2;
+            // Macros are translated here: the tensor only ever sees the plain
+            // instructions it already validates.
+            instr_q  <= is_pair_head ? {7'h03, 25'h0B}
+                     : (is2d_head ? {7'h05, fifo_head_instr[24:0]}
+                                  : fifo_head_instr);
+            rs1_q    <= is_pair_head ? fifo_head_lo : fifo_head_rs1;
+            // MT_ROWS(row, count): row in the low byte, count in the high one.
+            rs2_q    <= is_pair_head
+                        ? (32'd236 | ({24'd0, fifo_head_instr[19:15]} << 8))
+                        : fifo_head_rs2;
+            lo_first_q <= is_pair_head;
             a_step_q <= fifo_head_a;
             b_step_q <= fifo_head_b;
             c_step_q <= fifo_head_c;
@@ -262,7 +278,8 @@ module mt_cvxif_shim #(
             rep_q    <= (fifo_head_rep == 8'd0) ? 8'd0 : (fifo_head_rep - 8'd1);
 
             // Shape: nu in the instruction's rs1 field, nj in its rs2 field.
-            is2d_q  <= (fifo_head_instr[31:25] == 7'h09);
+            is2d_q  <= (fifo_head_instr[31:25] == 7'h09) ||
+                       (fifo_head_instr[31:25] == 7'h0A);
             u_q     <= ({3'd0, fifo_head_instr[19:15]} == 8'd0) ? 8'd0
                       : ({3'd0, fifo_head_instr[19:15]} - 8'd1);
             nj_q    <= ({3'd0, fifo_head_instr[24:20]} == 8'd0) ? 8'd1
@@ -312,7 +329,15 @@ module mt_cvxif_shim #(
             err_q         <= err_q | xif_rsp.result_err;
             result_data_q <= xif_rsp.result_data;
 
-            if (is2d_q && (j_q != 8'd0)) begin
+            if (lo_first_q) begin
+              // The paired command's LOAD has landed; run the grid now.
+              lo_first_q <= 1'b0;
+              instr_q    <= {7'h05, 25'h0B};
+              rs1_q      <= rs1_u_q;
+              rs2_q      <= rs2_u_q;
+              id_q       <= id_q + 4'd1;
+              state_q    <= S_ISSUE;
+            end else if (is2d_q && (j_q != 8'd0)) begin
               // Inner step: next output group.  The weight row advances by
               // b_step and the C row by d_step (one output group's worth of
               // columns), which is what the scalar loop did per group.
