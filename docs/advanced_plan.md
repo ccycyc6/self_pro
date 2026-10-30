@@ -589,3 +589,9 @@ scratch (0x1000_0000)
 
 固件保留单目标质心路径（就在 `run_detector` 里，注释掉峰值分支即可），
 **不需要重烧位流**。
+**P3a 位流（2026-10-30 20:07）**
+
+    build/pango/p3a/generate_bitstream/video_fb_top.sbit
+    sha256 5212779E8A14002EE915F4335737311E30E08D62BB64F12E340D3B69DCB83489
+
+上板时串口与 FTDI 一起从 USB 消失（板子掉电/掉线），待恢复后补测。
