@@ -153,15 +153,27 @@ int mt_detect_command(int argc, char **argv)
 
     for (img = 0; img < DET_IMG_COUNT; img++)
     {
+#ifdef MT_PROF
+        uint32_t tp = mt_rd_mcycle(), tq;
+#endif
         det_copy_to_scratch(NET_IMAGE, &det_imgs[img * DET_IMG_BYTES],
                             DET_IMG_BYTES);
+#ifdef MT_PROF
+        prof_img += mt_rd_mcycle() - tp; tp = mt_rd_mcycle();
+#endif
         net_pad(&L[0]);
         if ((rc = net_conv(&L[0], &cmds)) != 0) goto fail;
         net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 2u, 32u, 32u, 0u, 0u);
+#ifdef MT_PROF
+        prof_pad += mt_rd_mcycle() - tp; tp = mt_rd_mcycle();
+#endif
 
         net_pad(&L[1]);
         if ((rc = net_conv(&L[1], &cmds)) != 0) goto fail;
         net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 4u, 16u, 16u, 0u, 0u);
+#ifdef MT_PROF
+        prof_pool += mt_rd_mcycle() - tp; tp = mt_rd_mcycle();
+#endif
 
         net_pad(&L[2]);
         if ((rc = net_conv(&L[2], &cmds)) != 0) goto fail;
@@ -220,8 +232,9 @@ int mt_detect_command(int argc, char **argv)
         unsigned total     = (unsigned)(end - start);
         /* Where the frame time actually goes, per 1,000 commands. */
 #ifdef MT_PROF
-        printf("phase: weights=%u gemm=%u\n",
-               (unsigned)prof_wt, (unsigned)prof_gemm);
+        printf("phase: img=%u pad=%u pool=%u weights=%u gemm=%u epi=%u\n",
+               (unsigned)prof_img, (unsigned)prof_pad, (unsigned)prof_pool,
+               (unsigned)prof_wt, (unsigned)prof_gemm, (unsigned)prof_epi);
 #endif
         printf("perf: total=%u busy=%u dma=%u busy_pct=%u cmd=%u per_cmd=%u\n",
                total, busy, dma_stall,

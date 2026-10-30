@@ -114,6 +114,7 @@ int  net_conv(const net_layer_t *L, uint32_t *cmds);
 
 #ifdef MT_PROF
 extern uint32_t prof_wt, prof_gemm, prof_epi;
+extern uint32_t prof_img, prof_pad, prof_pool;
 #endif
 
 /* 2x2 max pooling over the [g][h][w][4] activation layout. */

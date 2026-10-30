@@ -36,6 +36,7 @@
 
 static void    net_wr8(uint32_t addr, uint8_t v)  { *(volatile uint8_t *)(uintptr_t)addr = v; }
 static uint8_t net_rd8(uint32_t addr)             { return *(volatile uint8_t *)(uintptr_t)addr; }
+
 void net_pad(const net_layer_t *L)
 {
     uint32_t ng = L->c_in / 4u, H = L->h, W = L->w;
@@ -46,30 +47,57 @@ void net_pad(const net_layer_t *L)
     uint32_t SW = L->src_w ? L->src_w : W;
     uint32_t WP = L->wpad ? L->wpad : W;
     uint32_t B = L->base ? L->base : MT_BUF_BASE;
-    uint32_t kx, g, h, wo, c;
+    uint32_t kx, g, h, wo;
 
+    /* One 32-bit word per pixel: the layout is 4 channels per position, so a
+     * pixel is exactly one word.  The previous version copied it a byte at a
+     * time through volatile pointers with the bounds test inside the inner
+     * loop, which cost more than the convolutional layers themselves. */
     for (kx = 0; kx < L->k; kx++)
-    for (g = 0; g < ng; g++)
-    for (h = 0; h < PH; h++)
-    for (wo = 0; wo < WP; wo++)
-    for (c = 0; c < 4u; c++)
     {
-        int32_t sh = (int32_t)h - (int32_t)L->pad;
-        int32_t sw = (int32_t)wo + (int32_t)kx - (int32_t)L->pad;
-        uint8_t v = 0u;
+        int32_t shift = (int32_t)kx - (int32_t)L->pad;
 
-        if (sh >= 0 && sh < (int32_t)H && sw >= 0 && sw < (int32_t)W)
+        for (g = 0; g < ng; g++)
         {
-            v = net_rd8(B + L->src_off
-                        + ((((g * H) + (uint32_t)sh) * SW + (uint32_t)sw) * 4u) + c);
+            volatile uint32_t *dst = (volatile uint32_t *)(uintptr_t)
+                (B + L->pad_off + (((kx * ng) + g) * PH * WP) * 4u);
+            const volatile uint32_t *src = (const volatile uint32_t *)(uintptr_t)
+                (B + L->src_off + (g * H * SW) * 4u);
+
+            for (h = 0; h < PH; h++)
+            {
+                int32_t sh = (int32_t)h - (int32_t)L->pad;
+
+                if (sh < 0 || sh >= (int32_t)H)
+                {
+                    for (wo = 0; wo < WP; wo++) dst[wo] = 0u;
+                }
+                else
+                {
+                    const volatile uint32_t *srow = src + ((uint32_t)sh * SW);
+                    /* Split the row into [zeros][copy][zeros] so the copy loop
+                     * has no per-pixel branch. */
+                    int32_t first = (shift >= 0) ? 0 : -shift;
+                    int32_t last  = (int32_t)W - shift;
+
+                    if (first < 0) first = 0;
+                    if (last > (int32_t)WP) last = (int32_t)WP;
+
+                    for (wo = 0; wo < (uint32_t)first; wo++) dst[wo] = 0u;
+                    for (wo = (uint32_t)first; wo < (uint32_t)last; wo++)
+                        dst[wo] = srow[(int32_t)wo + shift];
+                    for (wo = (uint32_t)last; wo < WP; wo++) dst[wo] = 0u;
+                }
+                dst += WP;
+            }
         }
-        net_wr8(B + L->pad_off + ((((((kx * ng) + g) * PH) + h) * WP + wo) * 4u) + c, v);
     }
 }
 
 #ifdef MT_PROF
 /* Phase timers, compiled out by default. */
 uint32_t prof_wt, prof_gemm, prof_epi, prof_tile;
+uint32_t prof_img, prof_pad, prof_pool;
 #define PROF_NOW() mt_rd_mcycle()
 #define PROF_ACC(v, t0) do { v += mt_rd_mcycle() - (t0); (t0) = mt_rd_mcycle(); } while (0)
 #endif
@@ -305,6 +333,9 @@ int net_conv(const net_layer_t *L, uint32_t *cmds)
                                       MT_ROWS(UB_OUT, n))) != 0) return rc;
                     count++;
                 }
+#ifdef MT_PROF
+            PROF_ACC(prof_epi, prof_t0);
+#endif
             }
         }
     }
