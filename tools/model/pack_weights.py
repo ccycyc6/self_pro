@@ -238,13 +238,25 @@ def int_forward(img_q, packed, trace=None):
 
 
 def main():
-    d = np.load(ROOT / "tools/model/detector_float.npz")
+    # detector_bp.npz comes from the backprop trainer (train_bp.py); the older
+    # detector_float.npz (random features + least-squares head) is still read
+    # when the trained one is absent.
+    src = ROOT / "tools/model/detector_bp.npz"
+    if not src.exists():
+        src = ROOT / "tools/model/detector_float.npz"
+    print("weights:", src.name)
+    d = np.load(src)
     w1, w2, w3 = d['w1'], d['w2'], d['w3']
     wh, bh = d['wh'], d['bh']
     xte, yte = d['xte'], d['yte']
     conv_w = [w1, w2, w3]
     head_w = wh.reshape(8, 16, 1, 1)
-    biases = [np.zeros(8), np.zeros(16), np.zeros(16), bh]
+    # Every convolution may carry a bias now that all weights are trained; the
+    # old model had none, so the keys are optional.
+    biases = [d['b1'] if 'b1' in d else np.zeros(8),
+              d['b2'] if 'b2' in d else np.zeros(16),
+              d['b3'] if 'b3' in d else np.zeros(16),
+              bh]
 
     # --- calibration: float activations on the test batch -------------------
     mx = [0.0, 0.0, 0.0, 0.0]
@@ -261,8 +273,11 @@ def main():
         o = conv_float(a, head_w, bh, 0)
         mx[3] = max(mx[3], float(np.max(np.abs(o))))
 
-    # Per-layer activation scales, measured on the calibration batch.
-    s_in = [1.0 / 127.0] + [m / 127.0 for m in mx]
+    # Per-layer activation scales, measured on the calibration batch.  The input
+    # scale must come from the data too: it used to be hardcoded for 0..1
+    # images, which breaks as soon as the calibration set is in byte units.
+    mx0 = max(float(np.max(np.abs(xte))), 1e-6)
+    s_in = [mx0 / 127.0] + [m / 127.0 for m in mx]
 
     # --- quantise -----------------------------------------------------------
     packed = []

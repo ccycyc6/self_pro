@@ -82,11 +82,13 @@ static uint32_t cam_grab(uint8_t *dst)
             uint32_t r = ((p >> 11) & 0x1Fu) << 3;
             uint32_t g = ((p >> 5) & 0x3Fu) << 2;
             uint32_t b = (p & 0x1Fu) << 3;
-            uint32_t y = (r * 77u + g * 151u + b * 28u) >> 8;
 
-            dst[i * 4u + 0u] = (uint8_t)y;
-            dst[i * 4u + 1u] = 0;
-            dst[i * 4u + 2u] = 0;
+
+            /* The trained model looks at colour, so the three channels carry
+             * the actual R, G, B instead of a luma value. */
+            dst[i * 4u + 0u] = (uint8_t)r;
+            dst[i * 4u + 1u] = (uint8_t)g;
+            dst[i * 4u + 2u] = (uint8_t)b;
             dst[i * 4u + 3u] = 0;
         }
 
@@ -194,13 +196,19 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
     dma_stall = ARES_MMIO32(0xE0000018u) - p0d;
     busy      = ARES_MMIO32(0xE000001Cu) - p0b;
 
-    if (sum > 0)
-        printf("  net: cell=(%d,%d) t=%u busy=%u dma_stall=%u\n",
-               (int)((sx * 10) / sum) / 10, (int)((sy * 10) / sum) / 10,
-               (unsigned)hot, (unsigned)busy, (unsigned)dma_stall);
-    else
-        printf("  net: no detection t=%u busy=%u dma_stall=%u\n",
-               (unsigned)hot, (unsigned)busy, (unsigned)dma_stall);
+    if (sum > 0) {
+        int cx = (int)((sx * 10) / sum) / 10;
+        int cy = (int)((sy * 10) / sum) / 10;
+
+        publish_text((uint32_t)(320 + cx * 80), (uint32_t)(40 + cy * 80));
+        publish_box(cx, cy, 1);
+        printf("  net: cell=(%d,%d) t=%u busy=%u\n",
+               cx, cy, (unsigned)hot, (unsigned)busy);
+    } else {
+        publish_box(0, 0, 0);
+        printf("  net: no detection t=%u busy=%u\n",
+               (unsigned)hot, (unsigned)busy);
+    }
 }
 
 int yolo_camera_run(void)
@@ -228,29 +236,21 @@ int yolo_camera_run(void)
            DET_EVERY);
     ares_mmio_write(ARES_LED_ADDR, 1u);
 
+    /* The trained model drives the box now; the brightness tracker is kept as a
+     * reference line on the UART so a colour-selective detection can be told
+     * apart from "the brightest thing in view". */
     for (;;) {
         int bx, by;
         uint32_t bavg, mean;
 
         frame = cam_grab(img);
         track_bright(img, &bx, &by, &bavg, &mean);
-
-        if (bavg > mean + TRACK_MARGIN) {
-            publish_text((uint32_t)(320 + bx * 80), (uint32_t)(40 + by * 80));
-            publish_box(bx, by, 1);
-            printf("f=%u bright=(%d,%d) box=(%d,%d)-(%d,%d) luma=%u/%u\n",
-                   (unsigned)frame, bx, by,
-                   320 + bx * 80, 40 + by * 80,
-                   320 + bx * 80 + 80, 40 + by * 80 + 80,
-                   (unsigned)bavg, (unsigned)mean);
-        } else {
-            publish_box(bx, by, 0);
-            printf("f=%u no target luma=%u/%u\n",
-                   (unsigned)frame, (unsigned)bavg, (unsigned)mean);
-        }
-
         det_copy_to_scratch(NET_IMAGE, img, 4096u);
-        if ((n++ % DET_EVERY) == 0u) run_detector(L, frame, &cmds);
+
+        run_detector(L, frame, &cmds);
+
+        printf("f=%u bright=(%d,%d) luma=%u/%u\n",
+               (unsigned)frame, bx, by, (unsigned)bavg, (unsigned)mean);
     }
     return 0;
 }
