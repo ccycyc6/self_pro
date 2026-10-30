@@ -132,7 +132,21 @@ int mt_detect_command(int argc, char **argv)
     /* Microbenchmark: how fast is this core on plain integer code?  Building
      * it in costs about 0.6% of a frame, so it is compiled out by default. */
     {
-        uint32_t b0 = mt_rd_mcycle(), b1, b2, i, acc = 1;
+        uint32_t b0 = mt_rd_mcycle(), b1, b2, b3, i, acc = 1;
+
+        /* Full command push (four stores) without touching the queue depth:
+         * the point is the store cost, not the accelerator. */
+        b1 = mt_rd_mcycle();
+        for (i = 0; i < 200u; i++) {
+            MT_MMIO32(MT_INSTR) = 0x0Bu;
+            MT_MMIO32(MT_RS1)   = i;
+            MT_MMIO32(MT_RS2)   = i;
+            MT_MMIO32(MT_STATUS) = 0u;   /* a write to status is a no-op */
+        }
+        b2 = mt_rd_mcycle();
+        printf("bench2: 4 stores = %u cycles/iter\n",
+               (unsigned)((b2 - b1) / 200u));
+        b1 = b2;
         for (i = 0; i < 2000u; i++) acc = acc * 3u + 1u;
         b1 = mt_rd_mcycle();
         for (i = 0; i < 500u; i++) MT_MMIO32(MT_KICK) = acc;
