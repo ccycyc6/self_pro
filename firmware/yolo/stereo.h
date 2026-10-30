@@ -1,0 +1,35 @@
+#ifndef STEREO_H
+#define STEREO_H
+
+#include <stdint.h>
+
+/* Stereo geometry.  f is in pixels for the 320x240 luma image; B is the
+ * baseline in millimetres (measured on the double-DVP module bracket). */
+#define ST_W        320
+#define ST_H        240
+#define ST_F_PX     275
+#define ST_BASELINE_MM 70
+
+#define ST_BLOCK    8
+#define ST_DMAX     24
+#define ST_MIN_COST 1
+
+/* Depth in millimetres for a (sub-pixel) disparity.  Returns 0 when the
+ * disparity is not usable. */
+uint32_t st_depth_mm(const int32_t d_q4);
+
+/* Height in millimetres from depth and the subject's pixel height. */
+uint32_t st_height_mm(uint32_t depth_mm, int32_t v_px);
+
+/* Matches one block: left block at (x,y), searching right image over 0..dmax.
+ * Returns disparity in quarter pixels (Q4), or -1 when the block has too little
+ * texture to be trusted.  out_cost may be NULL. */
+int32_t st_match_block(const uint8_t *left, const uint8_t *right,
+                       int x, int y, int32_t *out_cost);
+
+/* Median disparity (Q4) over a grid of blocks inside a box.  count receives the
+ * number of blocks that produced a usable value. */
+int32_t st_match_box(const uint8_t *left, const uint8_t *right,
+                     int x0, int y0, int x1, int y1, int *count);
+
+#endif
