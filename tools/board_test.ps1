@@ -19,7 +19,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Bitstream,
     [Parameter(Mandatory = $true)][string]$Firmware,
     [string]$Port = "COM9",
-    [int]$Seconds = 8
+    [int]$Seconds = 8,
+    # Only with this switch does the script close a terminal holding the port.
+    [switch]$ForcePort
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,16 +31,33 @@ function To-Slash([string]$p) {
     return ((Resolve-Path $p).Path -replace '\\', '/')
 }
 
-# --- free the serial port -------------------------------------------------
-foreach ($name in @("sscom5.13.1", "sscom5", "putty", "MobaXterm")) {
-    Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
-        if (-not $_.CloseMainWindow()) { $_.Kill() }
-        Start-Sleep -Milliseconds 500
-    }
+# --- check the serial port ------------------------------------------------
+# Deliberately does NOT close anybody's terminal: killing sscom earlier threw
+# away the user's window and they had to restart it by hand.  It only reports
+# what is in the way and asks for -ForcePort to clear it.
+function Test-PortFree([string]$name) {
+    $sp = New-Object System.IO.Ports.SerialPort($name, 115200, "None", 8, "One")
+    try { $sp.Open(); $sp.Close(); return $true }
+    catch { return $false }
+    finally { if ($sp.IsOpen) { $sp.Close() } }
 }
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-    Where-Object { $_.CommandLine -match "upload\.ps1" } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+if (-not (Test-PortFree $Port)) {
+    Write-Host "[!] $Port is in use"
+    Get-CimInstance Win32_Process |
+        Where-Object { $_.CommandLine -match "upload\.ps1|sscom|putty" } |
+        Select-Object ProcessId, Name, CommandLine | Format-List | Out-String -Width 160 |
+        Write-Host
+    if (-not $ForcePort) {
+        throw "$Port busy: close the terminal (sscom/PuTTY) or rerun with -ForcePort"
+    }
+    Get-Process -Name "sscom5.13.1", "sscom5", "putty", "MobaXterm" -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.CloseMainWindow() | Out-Null; Start-Sleep -Milliseconds 400 }
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+        Where-Object { $_.CommandLine -match "upload\.ps1" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+}
 
 # --- program --------------------------------------------------------------
 $sbit = To-Slash $Bitstream
