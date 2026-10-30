@@ -282,3 +282,10 @@ j 走一列内的输出组（权重行 +1、C 行 +ntiles4）。一维突发表�
 
 **踩坑记录**：内层步长最初只改了权重行、忘了 C 行，结果 golden 差 30 字节；
 补上 `d_step` 后逐字节一致。
+**P1f 位流（2026-10-30 10:54）**
+
+    build/pango/p1f/generate_bitstream/video_fb_top.sbit
+    sha256 71BC1C0F8909E515DC5F262D2D0ABF49DFD40BB89621B25A141A98BD20F8102D
+    LUT 25,760 (16.1%)   REG 14,860   DRM 52/415   hold 边角 -0.071 ns
+
+上板验证时 JTAG 链返回 `No devices detected`（板子当时未上电），待上电后补测。
