@@ -86,6 +86,7 @@ module board_cpu #(
         .osd_y1          (),
         .osd_valid       (),
         .osd_tog         (),
+        .osd_text        (),
         .mt_irq          (),
         .dbg_halt        (dbg_halt),
         .dbg_pc          (dbg_pc),

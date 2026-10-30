@@ -39,7 +39,10 @@ module ares_mmio_bus (
   output logic [11:0] osd_x1,
   output logic [11:0] osd_y1,
   output logic        osd_valid,
-  output logic        osd_tog
+  output logic        osd_tog,
+
+  // On-screen text: 8 glyph indices, written as 8 words at 0xD000_5000.
+  output logic [39:0] osd_text
 );
   import ares_pkg::*;
 
@@ -53,6 +56,7 @@ module ares_mmio_bus (
   wire sel_cam    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h2);
   wire sel_camctl = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h3);
   wire sel_osd    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h4);
+  wire sel_text   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h5);
 
   // ------------------------------------------------------------- OSD mailbox
   // 0x4000..0x400C hold the box, 0x4010 commits it (bit 0 = visible) by
@@ -76,6 +80,17 @@ module ares_mmio_bus (
           osd_tog   <= ~osd_tog;
         end
         default: ;
+      endcase
+    end else if (periph_req && req_write && sel_text) begin
+      case (req_addr[4:2])
+        3'd0: osd_text[4:0]   <= req_wdata[4:0];
+        3'd1: osd_text[9:5]   <= req_wdata[4:0];
+        3'd2: osd_text[14:10] <= req_wdata[4:0];
+        3'd3: osd_text[19:15] <= req_wdata[4:0];
+        3'd4: osd_text[24:20] <= req_wdata[4:0];
+        3'd5: osd_text[29:25] <= req_wdata[4:0];
+        3'd6: osd_text[34:30] <= req_wdata[4:0];
+        default: osd_text[39:35] <= req_wdata[4:0];
       endcase
     end
   end

@@ -117,6 +117,7 @@ module video_fb_top #(
     // ------------------------------------------- detector box (SoC mailbox)
     wire [11:0] osd_x0_w, osd_y0_w, osd_x1_w, osd_y1_w;
     wire        osd_valid_w, osd_tog_w;
+    wire [39:0] osd_text_w;
 
     video_hdmi_wrap #(
         .USE_EXT_DE     (1)
@@ -156,6 +157,7 @@ module video_fb_top #(
         .box_y1    (osd_y1_w),
         .box_valid (osd_valid_w),
         .box_tog   (osd_tog_w),
+        .text_chars(osd_text_w),
         .r_in      (hdmi_r),
         .g_in      (hdmi_g),
         .b_in      (hdmi_b),
@@ -763,6 +765,7 @@ module video_fb_top #(
         .osd_y1          (osd_y1_w),
         .osd_valid       (osd_valid_w),
         .osd_tog         (osd_tog_w),
+        .osd_text        (osd_text_w),
         .mt_irq          (),
         .dbg_halt        (soc_dbg_halt),
         .dbg_pc          (soc_dbg_pc),
@@ -784,6 +787,7 @@ module video_fb_top #(
     assign osd_y1_w    = 12'd0;
     assign osd_valid_w = 1'b0;
     assign osd_tog_w   = 1'b0;
+    assign osd_text_w  = 40'd0;
 `endif
 
     /* verilator lint_off UNUSEDSIGNAL */
