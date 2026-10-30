@@ -189,6 +189,12 @@ static int lost_n = 0;
 
 static void track_filter(int *cx, int *cy)
 {
+    if (hold_x < 0) {          /* first detection after reset: adopt it */
+        hold_x = *cx;
+        hold_y = *cy;
+        cand_n = 0;
+        return;
+    }
     if (*cx == hold_x && *cy == hold_y) {
         cand_n = 0;
     } else if (*cx == cand_x && *cy == cand_y) {
