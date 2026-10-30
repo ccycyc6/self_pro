@@ -356,7 +356,7 @@ void net_pool_k(uint32_t base, uint32_t src_off, uint32_t dst_off, uint32_t g_co
      * pool shrinks by one).  The division is written out as shifts on purpose:
      * the pooling path stays free of the multi-cycle DIV unit. */
     uint32_t oh, ow;
-    uint32_t g, oy, ox, c;
+    uint32_t g, oy, ox, ky, kx;
 
     if (stride == 1u) { oh = h - k + 1u; ow = w - k + 1u; }
     else              { oh = ((h - k) >> 1) + 1u; ow = ((w - k) >> 1) + 1u; }
@@ -365,34 +365,58 @@ void net_pool_k(uint32_t base, uint32_t src_off, uint32_t dst_off, uint32_t g_co
     if (dw == 0u) { dw = ow; }       /* destination row stride, padded   */
 
     for (g = 0; g < g_count; g++)
-    for (oy = 0; oy < oh; oy++)
-    for (ox = 0; ox < dw; ox++)
-    for (c = 0; c < 4u; c++)
     {
-        /* Walk the whole padded destination row so the padding holds a defined
-         * value (zero) rather than whatever was in the buffer.  A downstream
-         * layer may widen its tile count to cover it. */
-        uint8_t out = 0u;
+        volatile uint32_t *drow = (volatile uint32_t *)(uintptr_t)
+            (base + dst_off + (g * oh * dw) * 4u);
 
-        if (ox < ow)
+        for (oy = 0; oy < oh; oy++)
         {
-            int32_t best = -128;
-            uint32_t ky, kx;
+            const volatile uint32_t *s0 = (const volatile uint32_t *)(uintptr_t)
+                (base + src_off + (((g * h) + (oy * stride)) * sw) * 4u);
 
-            for (ky = 0; ky < k; ky++)
-            for (kx = 0; kx < k; kx++)
+            for (ox = 0; ox < dw; ox++)
             {
-                int8_t v = (int8_t)net_rd8(base + src_off
-                    + (((((g * h) + ((oy * stride) + ky)) * sw)
-                        + ((ox * stride) + kx)) * 4u) + c);
+                /* The four channels of a pixel share one 32-bit word, so the
+                 * whole pixel is fetched once and the maximum is taken per
+                 * byte lane.  The old version walked c in an outer loop and
+                 * recomputed the full address four times per output. */
+                uint32_t out = 0u;
 
-                if (v > best) { best = v; }
+                if (ox < ow)
+                {
+                    int32_t b0 = -128, b1 = -128, b2 = -128, b3 = -128;
+
+                    for (ky = 0; ky < k; ky++)
+                    {
+                        const volatile uint32_t *srow =
+                            s0 + (ky * sw) + (ox * stride);
+
+                        for (kx = 0; kx < k; kx++)
+                        {
+                            uint32_t v  = srow[kx];
+                            int32_t  v0 = (int8_t)(v);
+                            int32_t  v1 = (int8_t)(v >> 8);
+                            int32_t  v2 = (int8_t)(v >> 16);
+                            int32_t  v3 = (int8_t)(v >> 24);
+
+                            if (v0 > b0) b0 = v0;
+                            if (v1 > b1) b1 = v1;
+                            if (v2 > b2) b2 = v2;
+                            if (v3 > b3) b3 = v3;
+                        }
+                    }
+                    out = ((uint32_t)b0 & 0xFFu) |
+                          (((uint32_t)b1 & 0xFFu) << 8) |
+                          (((uint32_t)b2 & 0xFFu) << 16) |
+                          (((uint32_t)b3 & 0xFFu) << 24);
+                }
+                drow[ox] = out;
             }
-            out = (uint8_t)best;
+            drow += dw;
         }
-        net_wr8(base + dst_off + (((((g * oh) + oy) * dw) + ox) * 4u) + c, out);
     }
 }
+
 
 void net_pool2(uint32_t base, uint32_t src_off, uint32_t dst_off, uint32_t g_count,
                uint32_t h, uint32_t w, uint32_t sw, uint32_t dw)
