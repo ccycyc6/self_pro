@@ -79,11 +79,11 @@ def main():
     # scores were only a couple of steps wide.  Dividing the head by its own
     # maximum leaves argmax untouched (it is a positive scale) but makes those
     # differences span the whole int8 range.
-    if mx[3] > 1e-9:
-        head_w = head_w / mx[3]
-        bh = bh / mx[3]
-        mx[3] = 1.0
-        print("head normalised by %.2f" % (1.0,))
+    # NOTE: normalising the head by its maximum was tried and made the class
+    # means smaller (they are an average over the map, so they shrink with the
+    # scale) while the quantiser's step shrinks by the same factor -- a wash, but
+    # it left the differences at 2-8 LSBs.  Leaving the head as trained keeps
+    # them at ~30 LSBs.
 
     mx0 = max(float(np.max(np.abs(xcal))), 1e-6)
     s_in = [mx0 / 127.0] + [m / 127.0 for m in mx]
@@ -133,6 +133,26 @@ def main():
     print("confusion (rows truth, cols prediction):")
     print(conf)
 
+    # full check on every captured patch, with the same packed layers the
+    # firmware gets: this is the number that matters, not the 120-sample one
+    ok_all = 0
+    conf_all = np.zeros((3, 3), int)
+    for i in range(len(x)):
+        flat = np.clip(np.round(expand(x[i:i + 1])[0] / s_in[0]), -128, 127).astype(np.int32)
+        raw = (flat.reshape(-1) & 0xFF).astype(np.uint8)
+        out = pw.int_forward(raw, packed)
+        sc = []
+        for c in range(3):
+            g, lane = c // 4, c % 4
+            blk = out[g * 256:(g + 1) * 256].reshape(64, 4)
+            sc.append(int(np.mean(blk[:, lane].astype(np.int8))))
+        pred = int(np.argmax(sc))
+        conf_all[int(y[i]), pred] += 1
+        ok_all += int(pred == int(y[i]))
+    print(f"integer accuracy on all {len(x)} captured patches: "
+          f"{ok_all / len(x) * 100:.1f}%")
+    print(conf_all)
+
     ns = 8
     imgs = np.zeros((ns, 32 * 32 * 4), dtype=np.uint8)
     gold = np.zeros((ns, 64 * 8), dtype=np.uint8)
@@ -141,6 +161,27 @@ def main():
         flat = np.clip(flat, -128, 127)
         imgs[i] = (flat.reshape(-1) & 0xFF).astype(np.uint8)
         gold[i] = (pw.int_forward(imgs[i], packed).reshape(-1) & 0xFF).astype(np.uint8)
+
+    # optional: classify an external patch set with this exact packing
+    if len(sys.argv) > 2 and sys.argv[1] == "--check":
+        ext = np.load(ROOT / sys.argv[2])
+        ex = ext["x"] if "x" in ext else ext["patch"].reshape(-1, 32, 32)
+        print(f"checking {len(ex)} external patches")
+        for j in range(0, len(ex), max(1, len(ex) // 6)):
+            flat = np.clip(np.round(expand(ex[j:j + 1])[0] / s_in[0]), -128, 127).astype(np.int32)
+            out = pw.int_forward((flat.reshape(-1) & 0xFF).astype(np.uint8), packed)
+            sc = [int(np.mean(out[(c // 4) * 256:(c // 4 + 1) * 256].reshape(64, 4)[:, c % 4].astype(np.int8)))
+                  for c in range(3)]
+            print(f"  patch {j:3d}: scores {sc} -> class {int(np.argmax(sc))}")
+
+    labels = []
+    for i in range(ns):
+        flat = np.clip(np.round(expand(x[idx[i]:idx[i] + 1])[0] / s_in[0]), -128, 127).astype(np.int32)
+        out = pw.int_forward((flat.reshape(-1) & 0xFF).astype(np.uint8), packed)
+        sc = [int(np.mean(out[(c // 4) * 256:(c // 4 + 1) * 256].reshape(64, 4)[:, c % 4].astype(np.int8)))
+              for c in range(3)]
+        labels.append(int(np.argmax(sc)))
+    print("gold image labels:", labels)
 
     out_path = ROOT / "firmware/yolo/rps_weights.h"
     with open(out_path, "w") as f:

@@ -153,6 +153,13 @@ void trk_fit(trk_t *t, const uint8_t *grid)
     (void)i;
 }
 
+void trk_reset(void)
+{
+    int i;
+
+    for (i = 0; i < TRK_MAX; i++) tracks[i].used = 0;
+}
+
 void trk_set_threshold(int t)
 {
     if (t < 1) t = 1;

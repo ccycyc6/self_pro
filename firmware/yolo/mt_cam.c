@@ -518,74 +518,9 @@ static void rps_init(void)
     rps_ready = 1;
 }
 
-static void dump_mem(const char *tag, uint32_t off, int n)
-{
-    int k;
-
-    printf("%s:\n", tag);
-    for (k = 0; k < n; k++) {
-        printf("%02x", rd8(off + (uint32_t)k));
-        if ((k & 31) == 31) printf("\n");
-    }
-}
-
 static int rps_classify(const uint8_t *p32, int32_t *scores)
 {
-    static uint8_t img[32 * 32 * 4];
-    uint32_t cmds = 0;
-    int i, c, best = 0;
-
-    if (!rps_ready) rps_init();
-
-    if (g_use_gold) {
-        /* Replay a packed test image: its bytes are already quantised, so the
-         * result can be compared with the offline reference without needing a
-         * hand in front of the camera. */
-        g_use_gold = 0;
-        rps_stage_gold_image(0);
-    } else {
-        /* The engine's operands are signed bytes: quantise the 0..255 patch with
-         * the scale the calibration used, and clamp at 127 (raw bytes above 127
-         * used to wrap negative and the network saw garbage). */
-        for (i = 0; i < 32 * 32; i++) {
-            uint32_t q = ((uint32_t)p32[i] * (uint32_t)RPS_IN_MULT) >> 8;
-
-            if (q > 127u) q = 127u;
-            img[i * 4 + 0] = (uint8_t)q;
-            img[i * 4 + 1] = (uint8_t)q;
-            img[i * 4 + 2] = (uint8_t)q;
-            img[i * 4 + 3] = 0;
-        }
-        det_copy_to_scratch(NET_IMAGE, img, sizeof(img));
-    }
-
-    net_pad(&rps_L[0]);
-    if (net_conv(&rps_L[0], &cmds) != 0) return -1;
-    if (g_dump_l1) { g_dump_l1 = 0; dump_mem("l1dump", OUT_BUF, 2048); }
-    net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 2u, 32u, 32u, 0u, 0u);
-
-    net_pad(&rps_L[1]);
-    if (net_conv(&rps_L[1], &cmds) != 0) return -1;
-    net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 4u, 16u, 16u, 0u, 0u);
-
-    net_pad(&rps_L[2]);
-    if (net_conv(&rps_L[2], &cmds) != 0) return -1;
-    if (g_dump_l3) { g_dump_l3 = 0; dump_mem("l3dump", OUT_BUF, 1024); }
-
-    net_pad(&rps_L[3]);
-    if (net_conv(&rps_L[3], &cmds) != 0) return -1;
-    if (g_dump_head) { g_dump_head = 0; dump_mem("headdump", MID_BUF, 512); }
-
-    for (c = 0; c < 3; c++) {
-        int g = c / 4, lane = c % 4;
-        int32_t sum = 0;
-
-        for (i = 0; i < 64; i++)
-            sum += (int8_t)rd8(MID_BUF + (uint32_t)(g * 256 + i * 4 + lane));
-        scores[c] = sum / 64;
-        if (c == 0 || scores[c] > scores[best]) best = c;
-    }
-    return best;
+    return rps_forward(p32, scores);
 }
 #endif
 
@@ -611,6 +546,19 @@ int yolo_camera_run(void)
         if (ch == 't') trk_set_threshold(8);
         else if (ch == 'T') trk_set_threshold(20);
         else if (ch == 'l' || ch == 'L') { g_dump_l1 = 1; g_dump_l3 = 1; g_dump_head = 1; }
+        else if (ch == 'g' || ch == 'G') mt_detect_command(0, 0);
+        else if (ch == 'x' || ch == 'X') {
+            int32_t sc2[3];
+            int k2;
+
+            printf("selftest through the live path:\n");
+            for (k2 = 0; k2 < 8; k2++) {
+                int rc3 = rps_selftest(k2, sc2);
+
+                printf("  img %d -> class %d  scores %d,%d,%d\n", k2, rc3,
+                       (int)sc2[0], (int)sc2[1], (int)sc2[2]);
+            }
+        }
         else if (ch == 'v' || ch == 'V') { g_use_gold = 1; g_dump_l1 = 1; g_dump_l3 = 1; g_dump_head = 1; }
         else if (ch == 'r' || ch == 'R') {
             recording = !recording;
@@ -623,11 +571,16 @@ int yolo_camera_run(void)
          * track: that isolates the accelerator from everything else. */
         if (g_use_gold) {
             int32_t dummy[3];
-            static const uint8_t zero_patch[32 * 32];
-            int rc2 = rps_classify(zero_patch, dummy);
+            int k;
 
-            printf("gold replay rc=%d scores=%d,%d,%d\n", rc2,
-                   (int)dummy[0], (int)dummy[1], (int)dummy[2]);
+            g_use_gold = 0;
+            printf("gold replay of the packed images:\n");
+            for (k = 0; k < 8; k++) {
+                int rc2 = rps_forward_image(k, dummy);
+
+                printf("  img %d -> class %d  scores %d,%d,%d\n", k, rc2,
+                       (int)dummy[0], (int)dummy[1], (int)dummy[2]);
+            }
         }
 #endif
         trk_grab(cur32);
@@ -639,10 +592,18 @@ int yolo_camera_run(void)
         n = trk_step(prev32, cur32, list, 4);
         for (i = 0; i < n; i++) trk_fit(&list[i], cur32);
 
-        for (i = 0; i < 4; i++) {
-            if (i < n) draw_track(&list[i], (uint32_t)i);
-            else {
-                uint32_t base = OSD_BOX_BASE + (uint32_t)i * 16u;
+        /* One box only: the largest track is the hand, everything else on the
+         * grid is noise or a second blob of the same hand. */
+        {
+            int best = 0, k;
+
+            for (k = 1; k < n; k++)
+                if (list[k].w * list[k].h > list[best].w * list[best].h) best = k;
+
+            if (n > 0) draw_track(&list[best], 0u);
+
+            for (k = (n > 0 ? 1 : 0); k < 4; k++) {
+                uint32_t base = OSD_BOX_BASE + (uint32_t)k * 16u;
                 ares_mmio_write(base + 0u, 0u);
                 ares_mmio_write(base + 4u, 0u);
                 ares_mmio_write(base + 8u, 0u);
@@ -653,56 +614,57 @@ int yolo_camera_run(void)
         publish_count(n);
 
 #ifdef RPS_WEIGHTS
+        /* One hand only: the largest track is classified, and the answer is
+         * only accepted when a score clearly wins.  The screen shows the
+         * majority of the last few accepted answers, so a held pose reads
+         * steady instead of flickering between classes. */
         if ((frames & 0x03u) == 0u && n > 0) {
             static uint8_t cls_patch[32 * 32];
+            static int8_t hist[5];
+            static int hist_n;
+            static int shown = -1;
+            static uint32_t last_box;
+            const trk_t *t = &list[0];
             int32_t sc[3];
-            int edge = 0;
+            int k, best_track = 0, edge = 0;
 
-            if (trk_patch(&list[0], cls_patch, &edge)) {
-                int c;
-                int r;
+            for (k = 1; k < n; k++)
+                if (list[k].w * list[k].h > list[best_track].w * list[best_track].h)
+                    best_track = k;
+            t = &list[best_track];
 
-                c = rps_classify(cls_patch, sc);
+            if (trk_patch(t, cls_patch, &edge) && !edge) {
+                int c = rps_forward(cls_patch, sc);
+                int best = 0, second = -9999;
 
-                if (dump_head) {
-                    int k2;
-                    dump_head = 0;
-                    printf("patchdump:\n");
-                    for (k2 = 0; k2 < 32 * 32; k2++) {
-                        printf("%02x", cls_patch[k2]);
-                        if ((k2 & 31) == 31) printf("\n");
-                    }
-                    printf("l3dump:\n");
-                    for (k2 = 0; k2 < 1024; k2++) {
-                        printf("%02x", rd8(OUT_BUF + (uint32_t)k2));
-                        if ((k2 & 31) == 31) printf("\n");
-                    }
-                    printf("headdump:\n");
-                    for (k2 = 0; k2 < 512; k2++) {
-                        printf("%02x", rd8(MID_BUF + (uint32_t)k2));
-                        if ((k2 & 31) == 31) printf("\n");
-                    }
-                }
-                {
-                    uint32_t pmin = 255, pmax = 0, psum = 0;
-                    int k;
-                    for (k = 0; k < 32 * 32; k++) {
-                        uint32_t v = cls_patch[k];
-                        if (v < pmin) pmin = v;
-                        if (v > pmax) pmax = v;
-                        psum += v;
-                    }
-                    printf("classify: d=%d e=%d s=%d,%d,%d patch %u..%u mean %u\n",
-                           c, edge, (int)sc[0], (int)sc[1], (int)sc[2],
-                           (unsigned)pmin, (unsigned)pmax, (unsigned)(psum / 1024u));
-                }
                 if (c >= 0) {
-                    /* digits 1..3 in the text row: 1 rock, 2 paper, 3 scissors */
+                    for (k = 0; k < 3; k++) {
+                        if (sc[k] > sc[best]) { second = sc[best]; best = k; }
+                        else if (sc[k] > second) second = sc[k];
+                    }
+                    if (sc[best] - second >= 2) {
+                        hist[hist_n % 5] = (int8_t)best;
+                        hist_n++;
+                        {
+                            int vote[3] = {0, 0, 0}, i2, top = 0;
+
+                            for (i2 = 0; i2 < 5 && i2 < hist_n; i2++) vote[hist[i2]]++;
+                            for (i2 = 1; i2 < 3; i2++) if (vote[i2] > vote[top]) top = i2;
+                            if (vote[top] >= 2) shown = top;
+                        }
+                    }
+                    printf("hand: now %d (%d,%d,%d) shown %d box %d,%d %dx%d px %d,%d,%d,%d\n",
+                           c, (int)sc[0], (int)sc[1], (int)sc[2], shown,
+                           t->cx, t->cy, t->w, t->h,
+                           cls_patch[0], cls_patch[1], cls_patch[2], cls_patch[3]);
+                }
+
+                {
                     uint32_t v[8];
-                    v[0] = (uint32_t)(c + 1);
-                    for (r = 1; r < 8; r++) v[r] = GLYPH_SPACE;
-                    for (r = 0; r < 8; r++)
-                        ares_mmio_write(OSD_TEXT_BASE + (uint32_t)r * 4u, v[r]);
+                    for (k = 0; k < 8; k++) v[k] = GLYPH_SPACE;
+                    if (shown >= 0) v[0] = (uint32_t)(shown + 1);
+                    for (k = 0; k < 8; k++)
+                        ares_mmio_write(OSD_TEXT_BASE + (uint32_t)k * 4u, v[k]);
                 }
             }
         }

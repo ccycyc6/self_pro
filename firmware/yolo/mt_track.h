@@ -52,4 +52,8 @@ int trk_step(const uint8_t *prev, const uint8_t *cur, trk_t *out, int max_out);
 /* Motion threshold in luma counts (default 12). */
 void trk_set_threshold(int t);
 
+/* Forget every track.  The table is static, so a test (or a scene change) needs
+ * a way to start clean. */
+void trk_reset(void);
+
 #endif

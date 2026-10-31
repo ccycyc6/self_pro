@@ -79,6 +79,110 @@ void rps_stage_gold_image(int idx)
 }
 #endif
 
+#ifdef RPS_WEIGHTS
+/* Classify one 32x32 patch with the gesture head.
+ *
+ * This lives next to the detector because that is where the layer sequence is
+ * already exercised against the Python golden: the same det_make_layers, the
+ * same staging calls, the same order.  Duplicating the sequence in the camera
+ * firmware once produced layer outputs that did not match the reference, and
+ * there is no reason to keep two copies of it.
+ */
+int rps_forward_image(int idx, int32_t *scores);
+
+/* End-to-end check of the live path without a hand: take a packed test image
+ * (already quantised), undo the quantiser to make it look like a camera patch,
+ * and run it through rps_forward.  If the class matches that image's label, the
+ * quantiser plus inference is equivalent to the reference; if not, the bug is
+ * in this path and not in the network. */
+int rps_selftest(int idx, int32_t *scores)
+{
+    static uint8_t raw[32 * 32];
+    uint32_t i;
+
+    for (i = 0; i < 32u * 32u; i++) {
+        uint32_t q = rps_imgs[idx * 4096u + i * 4u];
+        uint32_t v = (q * 256u + (uint32_t)RPS_IN_MULT / 2u) / (uint32_t)RPS_IN_MULT;
+
+        raw[i] = (uint8_t)(v > 255u ? 255u : v);
+    }
+    return rps_forward(raw, scores);
+}
+
+static int g_rps_img = -1;
+
+int rps_forward_image(int idx, int32_t *scores)
+{
+    g_rps_img = idx;
+    return rps_forward(0, scores);
+}
+
+int rps_forward(const uint8_t *p32, int32_t *scores)
+{
+    static uint8_t img[32 * 32 * 4];
+    net_layer_t L[4];
+    uint32_t cmds = 0, i;
+    int c, best = 0;
+
+    det_make_layers(L);
+    det_copy_to_scratch(NET_WT + DET_WT_OFF_L1, det_wt1, sizeof(det_wt1));
+    det_copy_to_scratch(NET_WT + DET_WT_OFF_L2, det_wt2, sizeof(det_wt2));
+    det_copy_to_scratch(NET_WT + DET_WT_OFF_L3, det_wt3, sizeof(det_wt3));
+    det_copy_to_scratch(NET_WT + DET_WT_OFF_L4, det_wt4, sizeof(det_wt4));
+    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L1, det_bias1, sizeof(det_bias1));
+    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L2, det_bias2, sizeof(det_bias2));
+    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L3, det_bias3, sizeof(det_bias3));
+    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L4, det_bias4, sizeof(det_bias4));
+    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L1, det_cfg1, sizeof(det_cfg1));
+    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L2, det_cfg2, sizeof(det_cfg2));
+    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L3, det_cfg3, sizeof(det_cfg3));
+    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L4, det_cfg4, sizeof(det_cfg4));
+
+    if (p32) {
+        for (i = 0; i < 32u * 32u; i++) {
+            uint32_t q = ((uint32_t)p32[i] * (uint32_t)RPS_IN_MULT) >> 8;
+
+            if (q > 127u) q = 127u;
+            img[i * 4u + 0u] = (uint8_t)q;
+            img[i * 4u + 1u] = (uint8_t)q;
+            img[i * 4u + 2u] = (uint8_t)q;
+            img[i * 4u + 3u] = 0u;
+        }
+        det_copy_to_scratch(NET_IMAGE, img, sizeof(img));
+    } else {
+        int k = (g_rps_img < 0) ? 0 : g_rps_img;
+        g_rps_img = -1;
+        det_copy_to_scratch(NET_IMAGE, rps_imgs + (uint32_t)k * 4096u, 4096u);
+    }
+
+    mt_reset_status();
+    net_pad(&L[0]);
+    if (net_conv(&L[0], &cmds) != 0) return -1;
+    net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 2u, 32u, 32u, 0u, 0u);
+
+    net_pad(&L[1]);
+    if (net_conv(&L[1], &cmds) != 0) return -1;
+    net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 4u, 16u, 16u, 0u, 0u);
+
+    net_pad(&L[2]);
+    if (net_conv(&L[2], &cmds) != 0) return -1;
+
+    net_pad(&L[3]);
+    if (net_conv(&L[3], &cmds) != 0) return -1;
+
+    for (c = 0; c < 3; c++) {
+        int g = c / 4, lane = c % 4;
+        int32_t sum = 0;
+
+        for (i = 0; i < 64u; i++)
+            sum += (int8_t)det_rd8(MID_BUF + (uint32_t)(g * 256 + (int)i * 4 + lane));
+        scores[c] = sum / 64;
+        if (c == 0 || scores[c] > scores[best]) best = c;
+    }
+    return best;
+}
+#endif
+
 void det_make_layers(net_layer_t *L)
 {
     L[0] = (net_layer_t){32u, 32u, 4u, 8u, 3u, 1u, 1u, 0, 0u, 0,
@@ -207,6 +311,17 @@ int mt_detect_command(int argc, char **argv)
 #endif
         net_pad(&L[0]);
         if ((rc = net_conv(&L[0], &cmds)) != 0) goto fail;
+        {
+            int k2;
+            printf("l1dump:\n");
+            for (k2 = 0; k2 < 64; k2++) {
+                printf("%02x", det_rd8(OUT_BUF + (uint32_t)k2));
+                if ((k2 & 31) == 31) printf("\n");
+            }
+            printf("imgbytes:\n");
+            for (k2 = 0; k2 < 16; k2++) printf("%02x", det_rd8(NET_IMAGE + (uint32_t)k2));
+            printf("\n");
+        }
         net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 2u, 32u, 32u, 0u, 0u);
 #ifdef MT_PROF
         prof_pad += mt_rd_mcycle() - tp; tp = mt_rd_mcycle();

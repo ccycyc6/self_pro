@@ -54,6 +54,7 @@ int main(void)
 
     /* 2. two squares far apart -> two tracks */
     {
+        trk_reset();
         int x, y;
         memset(a, 100, sizeof(a));
         for (y = 4; y <= 8; y++) for (x = 4; x <= 8; x++) a[y * TRK_GRID + x] = 160;
@@ -67,6 +68,7 @@ int main(void)
 
     /* 3. two fragments close together are one object */
     {
+        trk_reset();
         int x, y;
         memset(a, 100, sizeof(a));
         for (y = 10; y <= 14; y++) for (x = 10; x <= 14; x++) a[y * TRK_GRID + x] = 160;
@@ -79,6 +81,7 @@ int main(void)
 
     /* 4. the object leaves: the track disappears after the miss limit */
     {
+        trk_reset();
         fill_square(a, 10, 12, 3);
         for (f = 0; f < 4; f++) {            /* make it move, so a track exists */
             fill_square(b, 10 + f, 12, 3);
@@ -86,10 +89,12 @@ int main(void)
             memcpy(a, b, sizeof(a));
         }
         /* the object leaves: one frame of change, then a still scene */
+        /* A confirmed track is held for TRK_HOLD_FRAMES motion-free frames so a
+         * held pose survives; the drop happens after that. */
         memset(b, 100, sizeof(b));
         trk_step(a, b, list, 4);
         memcpy(a, b, sizeof(a));
-        for (f = 0; f < 8; f++) n = trk_step(a, b, list, 4);
+        for (f = 0; f < TRK_HOLD_FRAMES + 4; f++) n = trk_step(a, b, list, 4);
         check(n == 0, "the track is dropped when the object leaves");
     }
 
