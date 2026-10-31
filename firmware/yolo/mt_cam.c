@@ -68,11 +68,14 @@ static uint32_t cam2_grab(uint8_t *dst)
     uint32_t frame;
 
     for (;;) {
-        uint32_t f0 = ARES_MMIO32(0xD0006008u);
+        uint32_t f0 = ARES_MMIO32(0xD000A000u);
         uint32_t i;
 
         for (i = 0; i < 1024u; i++) {
-            uint32_t p = ARES_MMIO32(0xD0006000u + i * 4u) & 0xFFFFu;
+            uint32_t p;
+
+            (void)ARES_MMIO32(0xD0006000u + i * 4u);   /* address phase */
+            p = ARES_MMIO32(0xD0006000u + i * 4u) & 0xFFFFu;
             uint32_t r = ((p >> 11) & 0x1Fu) << 3;
             uint32_t g = ((p >> 5) & 0x3Fu) << 2;
             uint32_t b = (p & 0x1Fu) << 3;
@@ -83,7 +86,7 @@ static uint32_t cam2_grab(uint8_t *dst)
             dst[i * 4u + 3u] = 0;
         }
 
-        frame = ARES_MMIO32(0xD0006008u);
+        frame = ARES_MMIO32(0xD000A000u);
         if (frame == f0) return frame;
     }
 }
@@ -361,9 +364,12 @@ int yolo_camera_run(void)
         for (;;) {
             frame = cam_grab(img);
             (void)cam2_grab(img2);
-            printf("f1=%u f2=%u\n",
+            printf("f1=%u f2=%u | c1=%08x c2=%08x c2_4=%08x\n",
                    (unsigned)ARES_MMIO32(0xD0003000u),
-                   (unsigned)ARES_MMIO32(0xD0006008u));
+                   (unsigned)ARES_MMIO32(0xD000A000u),
+                   (unsigned)ARES_MMIO32(0xD0002000u),
+                   (unsigned)ARES_MMIO32(0xD0006000u),
+                   (unsigned)ARES_MMIO32(0xD0006010u));
             for (y = 0; y < 16; y++) {
                 char line[34];
                 for (x = 0; x < 16; x++) {
