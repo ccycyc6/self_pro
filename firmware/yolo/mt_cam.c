@@ -21,6 +21,14 @@
 #include "mt_detect.h"
 #include "mt_detect_weights.h"
 #include "stereo.h"
+#include "mt_track.h"
+
+/* One character from the serial port, or -1. */
+static int uart_poll(void)
+{
+    if (ARES_MMIO32(UART_STATUS) & 2u) return (int)(ARES_MMIO32(UART_BASE) & 0xFFu);
+    return -1;
+}
 
 #define CAM_PIX_BASE 0xD0002000u
 #define CAM_FRAME    0xD0003000u
@@ -417,90 +425,87 @@ static void find_texture(int *ox, int *oy)
     if (*oy > ST_H - ROI_H) *oy = ST_H - ROI_H;
 }
 
+/* Draw one track: the 32x32 grid covers the stereo crop, which sits at (320,80)
+ * of the 720p picture and is twice the grid resolution, so a cell is 20 pixels
+ * across and 15 down. */
+static void draw_track(const trk_t *t, uint32_t slot)
+{
+    uint32_t base = OSD_BOX_BASE + slot * 16u;
+    int x0 = t->cx - t->w / 2, y0 = t->cy - t->h / 2;
+    int x1 = x0 + t->w, y1 = y0 + t->h;
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > TRK_GRID - 1) x1 = TRK_GRID - 1;
+    if (y1 > TRK_GRID - 1) y1 = TRK_GRID - 1;
+
+    ares_mmio_write(base + 0u,  (uint32_t)(320 + x0 * 20));
+    ares_mmio_write(base + 4u,  (uint32_t)(80 + y0 * 15));
+    ares_mmio_write(base + 8u,  (uint32_t)(320 + x1 * 20));
+    ares_mmio_write(base + 12u, (uint32_t)(80 + y1 * 15));
+}
+
+static void publish_count(int n)
+{
+    uint32_t v[8];
+    int i;
+
+    v[0] = (uint32_t)(n < 0 ? 0 : (n > 9 ? 9 : n));
+    for (i = 1; i < 8; i++) v[i] = GLYPH_SPACE;
+    for (i = 0; i < 8; i++)
+        ares_mmio_write(OSD_TEXT_BASE + (uint32_t)i * 4u, v[i]);
+}
+
 int yolo_camera_run(void)
 {
-    uint32_t frames = 0, t0 = 0;
+    static uint8_t prev32[TRK_GRID * TRK_GRID];
+    static uint8_t cur32[TRK_GRID * TRK_GRID];
+    trk_t list[4];
+    uint32_t frames = 0, t0;
+    int first = 1;
 
-    printf("stereo range: %dx%d adaptive ROI, f=%d px, baseline %d mm\n",
-           ROI_W, ROI_H, ST_F_PX, ST_BASELINE_MM);
+    printf("motion tracker: 32x32 grid, threshold %d\n", 12);
     ares_mmio_write(ARES_LED_ADDR, 1u);
     t0 = mt_rd_mcycle();
 
     for (;;) {
-        int n = 0;
-        int32_t d_q4;
-        uint32_t z_mm = 0;
+        int n, i, ch;
 
-        {
-            uint32_t ta = mt_rd_mcycle();
-            read_roi(ST_L_BASE, ROI_X0, ROI_Y0, ROI_W, ROI_H, roi_l);
-            read_roi(ST_R_BASE, ROI_X0 - ST_DMAX, ROI_Y0,
-                     ROI_W + ST_DMAX, ROI_H, roi_r);
-            if ((frames & 3u) == 0u)
-                printf("roi: %u cyc l0=%u r0=%u | thumb1=%08x thumb2=%08x stl=%08x str=%08x\n",
-                       (unsigned)(mt_rd_mcycle() - ta),
-                       (unsigned)roi_l[0], (unsigned)roi_r[0],
-                       (unsigned)(ARES_MMIO32(0xD0002000u) & 0xFFFFu),
-                       (unsigned)(ARES_MMIO32(0xD0006000u) & 0xFFFFu),
-                       (unsigned)(ARES_MMIO32(0xD0007000u) & 0xFFu),
-                       (unsigned)(ARES_MMIO32(0xD0008000u) & 0xFFu));
+        ch = uart_poll();
+        if (ch == 't') trk_set_threshold(8);
+        else if (ch == 'T') trk_set_threshold(20);
+
+        trk_grab(cur32);
+        if (first) {
+            for (i = 0; i < TRK_GRID * TRK_GRID; i++) prev32[i] = cur32[i];
+            first = 0;
         }
 
-        if ((frames & 0x07u) == 0u) {
-            /* how much texture is in the ROI at all, and where the best block
-             * sits: without contrast there is nothing to match. */
-            uint32_t lo = 255, hi = 0, i2, best = 0;
-            int bx = 0, by = 0, x2, y2;
+        n = trk_step(prev32, cur32, list, 4);
 
-            for (i2 = 0; i2 < (uint32_t)(ROI_W * ROI_H); i2++) {
-                if (roi_l[i2] < lo) lo = roi_l[i2];
-                if (roi_l[i2] > hi) hi = roi_l[i2];
-            }
-            for (y2 = 0; y2 + 8 <= ROI_H; y2 += 24)
-                for (x2 = 0; x2 + 8 <= ROI_W; x2 += 24) {
-                    uint32_t cost[ST_DMAX + 1], l2 = 0, h2 = 0;
-                    int k;
-                    int nb = st_block_curve(roi_l, ROI_W, roi_r,
-                                            ROI_W + ST_DMAX, x2, y2,
-                                            cost, ST_DMAX + 1, &l2, &h2);
-                    for (k = 0; k < nb; k++)
-                        if (cost[k] > best) best = cost[k];
-                    (void)l2;
-                }
-            printf("roi luma %u..%u (contrast %u), best-block peak %u\n",
-                   (unsigned)lo, (unsigned)hi, (unsigned)(hi - lo),
-                   (unsigned)best);
-            {
-                /* whole stereo field of view (the central 640x480 of the 720p
-                 * picture, decimated to 320x240), sampled every 8th pixel */
-                int ax, ay;
-                for (ay = 0; ay < 24; ay++) {
-                    char row[42];
-                    for (ax = 0; ax < 40; ax++) {
-                        uint32_t addr = ST_L_BASE +
-                            (uint32_t)((ay * 10) * ST_W + (ax * 8)) * 4u;
-                        uint32_t v = ARES_MMIO32(addr) & 0xFFu;
-                        row[ax] = (v > 120) ? '#' : (v > 70 ? '+' : (v > 35 ? '.' : ' '));
-                    }
-                    row[40] = 0;
-                    printf("|%s|\n", row);
-                }
+        for (i = 0; i < 4; i++) {
+            if (i < n) draw_track(&list[i], (uint32_t)i);
+            else {
+                uint32_t base = OSD_BOX_BASE + (uint32_t)i * 16u;
+                ares_mmio_write(base + 0u, 0u);
+                ares_mmio_write(base + 4u, 0u);
+                ares_mmio_write(base + 8u, 0u);
+                ares_mmio_write(base + 12u, 0u);
             }
         }
+        ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
+        publish_count(n);
 
-        d_q4 = st_match_roi_step(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
-                                 0, 0, ROI_W, ROI_H, 32, &n);
-        if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
+        if ((frames & 0x03u) == 0u) {
+            printf("tracks=%d", n);
+            for (i = 0; i < n; i++)
+                printf(" [%d] %d,%d %dx%d", i, list[i].cx, list[i].cy,
+                       list[i].w, list[i].h);
+            printf("  %u cyc/frame\n", (unsigned)((mt_rd_mcycle() - t0) / (frames + 1u)));
+        }
 
-        publish_range(z_mm);
-
+        for (i = 0; i < TRK_GRID * TRK_GRID; i++) prev32[i] = cur32[i];
         frames++;
-        if ((frames & 3u) == 0u) {
-            uint32_t el = mt_rd_mcycle() - t0;
-            printf("d_q4=%d blocks=%d z_mm=%u  (%u frames, %u cyc/frame)\n",
-                   (int)d_q4, n, (unsigned)z_mm, (unsigned)frames,
-                   (unsigned)(el / frames));
-        }
     }
     return 0;
 }
