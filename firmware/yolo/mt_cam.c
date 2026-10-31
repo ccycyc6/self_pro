@@ -499,9 +499,29 @@ int yolo_camera_run(void)
         if ((frames & 0x03u) == 0u) {
             printf("tracks=%d", n);
             for (i = 0; i < n; i++)
-                printf(" [%d] %d,%d %dx%d", i, list[i].cx, list[i].cy,
-                       list[i].w, list[i].h);
+                printf(" [%d] %d,%d %dx%d held=%d", i, list[i].cx, list[i].cy,
+                       list[i].w, list[i].h, list[i].held);
             printf("  %u cyc/frame\n", (unsigned)((mt_rd_mcycle() - t0) / (frames + 1u)));
+        }
+
+        /* Every eighth frame, show the normalised patch of the first track: if
+         * the box is right, the hand fills the patch whatever the distance. */
+        if ((frames & 0x07u) == 0u && n > 0) {
+            static uint8_t patch[32 * 32];
+            int ax, ay;
+
+            if (trk_patch(&list[0], patch)) {
+                printf("patch of track 0:\n");
+                for (ay = 0; ay < 16; ay++) {
+                    char row[18];
+                    for (ax = 0; ax < 16; ax++) {
+                        uint32_t v = patch[(ay * 2) * 32 + ax * 2];
+                        row[ax] = (v > 140) ? '#' : (v > 90 ? '+' : (v > 45 ? '.' : ' '));
+                    }
+                    row[16] = 0;
+                    printf("|%s|\n", row);
+                }
+            }
         }
 
         for (i = 0; i < TRK_GRID * TRK_GRID; i++) prev32[i] = cur32[i];

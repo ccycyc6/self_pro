@@ -24,6 +24,38 @@ typedef struct {
 
 static blob_t blobs[TRK_MAX];
 
+int trk_patch(const trk_t *t, uint8_t *out32)
+{
+    int x0, y0, w, h, i, j;
+
+    if (t->w <= 0 || t->h <= 0) return 0;
+
+    /* grid cell = 10 px across, 7.5 px down; 20% margin around the box */
+    x0 = (t->cx - t->w / 2) * 10 - (t->w * 10) / 10;
+    y0 = (t->cy - t->h / 2) * 15 / 2 - (t->h * 15) / 20;
+    w  = t->w * 10 + (t->w * 10) / 5;
+    h  = (t->h * 15) / 2 + (t->h * 15) / 10;
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x0 + w > TRK_W) w = TRK_W - x0;
+    if (y0 + h > 240) h = 240 - y0;
+    if (w < 8) w = 8;
+    if (h < 8) h = 8;
+
+    for (j = 0; j < 32; j++) {
+        int sy = y0 + (j * h) / 32;
+        if (sy > 239) sy = 239;
+        for (i = 0; i < 32; i++) {
+            int sx = x0 + (i * w) / 32;
+            if (sx > TRK_W - 1) sx = TRK_W - 1;
+            out32[j * 32 + i] =
+                (uint8_t)(ARES_MMIO32(TRK_L_BASE + (uint32_t)(sy * TRK_W + sx) * 4u) & 0xFFu);
+        }
+    }
+    return 1;
+}
+
 void trk_set_threshold(int t)
 {
     if (t < 1) t = 1;
@@ -206,7 +238,18 @@ int trk_step(const uint8_t *prev, const uint8_t *cur, trk_t *out, int max_out)
 
     for (i = 0; i < TRK_MAX; i++) {
         if (!tracks[i].used) continue;
-        if (tracks[i].misses > 5) { tracks[i].used = 0; continue; }
+
+        if (tracks[i].misses == 0) {
+            tracks[i].held = 0;
+        } else if (tracks[i].confirmed) {
+            /* still showing the same thing: keep the box, the pose is held */
+            tracks[i].held++;
+            if (tracks[i].held > TRK_HOLD_FRAMES) { tracks[i].used = 0; continue; }
+        } else if (tracks[i].misses > 5) {
+            tracks[i].used = 0;
+            continue;
+        }
+
         if (tracks[i].confirmed && n < max_out) out[n++] = tracks[i];
     }
     return n;

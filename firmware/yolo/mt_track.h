@@ -19,7 +19,17 @@ typedef struct {
     int cx, cy;         /* smoothed centre, in grid cells */
     int w, h;           /* smoothed size, in grid cells */
     int hits, misses;
+    int held;           /* frames kept alive without motion */
 } trk_t;
+
+/* A confirmed track survives this many motion-free frames: a rock/paper/
+ * scissors pose is held still, and a motion-driven track would vanish. */
+#define TRK_HOLD_FRAMES 60
+
+/* Resample a track's box (with margin) into a 32x32 luma patch.  Because the
+ * source region is the box itself, a hand at any distance fills the patch the
+ * same way, which is what a classifier needs.  Returns 0 if the box is empty. */
+int trk_patch(const trk_t *t, uint8_t *out32);
 
 /* Build the 32x32 luma grid by averaging four samples per cell.  That is 4096
  * bus reads (about 20k cycles), against 76800 for the full image. */
