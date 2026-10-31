@@ -54,7 +54,8 @@ module ares_mmio_bus (
 );
   import ares_pkg::*;
 
-  typedef enum logic [2:0] {M_IDLE, M_RESP, M_CAM, M_CAM2, M_CAM2R, M_STL, M_STR} state_t;
+  typedef enum logic [3:0] {M_IDLE, M_RESP, M_CAM, M_CAM2, M_CAM2R,
+                            M_STL, M_STL2, M_STR, M_STR2} state_t;
   state_t state_q;
   logic [31:0] rsp_data_q;
 
@@ -192,6 +193,8 @@ module ares_mmio_bus (
               cam2_sel_q  <= 1'b1;
               state_q <= M_CAM;
             end else if (sel_stl && !req_write) begin
+              // the frame memory output is registered, so the data is only
+              // valid two cycles after the address (same as the thumbnails)
               st_l_addr_q <= req_addr[19:2];
               state_q <= M_STL;
             end else if (sel_str && !req_write) begin
@@ -232,10 +235,16 @@ module ares_mmio_bus (
           state_q <= M_RESP;
         end
         M_STL: begin
+          state_q <= M_STL2;
+        end
+        M_STL2: begin
           rsp_data_q <= {24'd0, st_l_data};
           state_q <= M_RESP;
         end
         M_STR: begin
+          state_q <= M_STR2;
+        end
+        M_STR2: begin
           rsp_data_q <= {24'd0, st_r_data};
           state_q <= M_RESP;
         end

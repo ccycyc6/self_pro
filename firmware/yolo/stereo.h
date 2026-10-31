@@ -11,7 +11,7 @@
 #define ST_BASELINE_MM 70
 
 #define ST_BLOCK    8
-#define ST_DMAX     24
+#define ST_DMAX     16
 #define ST_MIN_COST 1
 
 /* Depth in millimetres for a (sub-pixel) disparity.  Returns 0 when the

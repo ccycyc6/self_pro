@@ -341,8 +341,8 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
 #define ST_R_BASE   0xD0008000u
 #define ROI_X0      96
 #define ROI_Y0      60
-#define ROI_W       64
-#define ROI_H       64
+#define ROI_W       48
+#define ROI_H       32
 
 static uint8_t roi_l[ROI_W * ROI_H];
 static uint8_t roi_r[(ROI_W + ST_DMAX) * ROI_H];
@@ -368,7 +368,7 @@ static void publish_range(uint32_t mm)
     int i;
 
     v[0] = (cm / 100u) % 10u;
-    v[1] = 13u;                       /* '.' */
+    v[1] = 13u;                       /* separator dot */
     v[2] = (cm / 10u) % 10u;
     v[3] = cm % 10u;
     for (i = 4; i < 8; i++) v[i] = GLYPH_SPACE;
@@ -391,9 +391,17 @@ int yolo_camera_run(void)
         int32_t d_q4;
         uint32_t z_mm = 0;
 
-        read_roi(ST_L_BASE, ROI_X0, ROI_Y0, ROI_W, ROI_H, roi_l);
-        read_roi(ST_R_BASE, ROI_X0 - ST_DMAX, ROI_Y0,
-                 ROI_W + ST_DMAX, ROI_H, roi_r);
+        {
+            uint32_t ta = mt_rd_mcycle();
+            read_roi(ST_L_BASE, ROI_X0, ROI_Y0, ROI_W, ROI_H, roi_l);
+            read_roi(ST_R_BASE, ROI_X0 - ST_DMAX, ROI_Y0,
+                     ROI_W + ST_DMAX, ROI_H, roi_r);
+            if ((frames & 3u) == 0u)
+                printf("roi read: %u cycles, l0=%u l1=%u r0=%u r1=%u\n",
+                       (unsigned)(mt_rd_mcycle() - ta),
+                       (unsigned)roi_l[0], (unsigned)roi_l[1],
+                       (unsigned)roi_r[0], (unsigned)roi_r[1]);
+        }
 
         d_q4 = st_match_roi(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
                             0, 0, ROI_W, ROI_H, &n);
