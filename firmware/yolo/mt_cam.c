@@ -653,10 +653,23 @@ int yolo_camera_run(void)
                 ares_mmio_write(OSD_BOX_BASE + 12u, (uint32_t)(80 + by1 * 2));
                 ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
 
-                if ((frames & 0x07u) == 0u)
+                if ((frames & 0x0Fu) == 0u) {
+                    int ax, ay;
                     printf("object (%d,%d)-(%d,%d) v_px=%d d_q4=%d z=%u h=%u%s\n",
                            bx0, by0, bx1, by1, v_px, (int)d_q4,
                            (unsigned)z_mm, (unsigned)h_cm, edge ? " edge" : "");
+                    /* what the stereo pair actually sees: 40x24 cells of the
+                     * 320x240 crop, '#' bright, '+' mid, '.' dark, ' ' black */
+                    for (ay = 0; ay < 24; ay++) {
+                        char row[42];
+                        for (ax = 0; ax < 40; ax++) {
+                            uint32_t v = cur[ay * 40 + ax];
+                            row[ax] = (v > 140) ? '#' : (v > 90 ? '+' : (v > 45 ? '.' : ' '));
+                        }
+                        row[40] = 0;
+                        printf("|%s|\n", row);
+                    }
+                }
             } else {
                 ares_mmio_write(OSD_BOX_BASE + 0u, 0u);
                 ares_mmio_write(OSD_BOX_BASE + 4u, 0u);
