@@ -337,8 +337,8 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
  * phase, then data), so a 64x64 left plus 88x64 right region costs about
  * 19k bus accesses -- roughly 7 ms, which is why the region is small.
  */
-#define ST_L_BASE   0xD0007000u
-#define ST_R_BASE   0xD0008000u
+#define ST_L_BASE   0xD0100000u
+#define ST_R_BASE   0xD0150000u
 #define ROI_X0      96
 #define ROI_Y0      60
 #define ROI_W       48
@@ -354,7 +354,10 @@ static void read_roi(uint32_t base, int x0, int y0, int w, int h, uint8_t *dst)
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
             uint32_t addr = base + (uint32_t)((y0 + y) * ST_W + (x0 + x)) * 4u;
-            (void)ARES_MMIO32(addr);
+
+            // One read is enough: the window's state machine already waits the
+            // two cycles the frame memory needs.  A second read here returned
+            // zeros (the extra request landed while the bus was still busy).
             dst[y * w + x] = (uint8_t)(ARES_MMIO32(addr) & 0xFFu);
         }
     }
@@ -397,10 +400,13 @@ int yolo_camera_run(void)
             read_roi(ST_R_BASE, ROI_X0 - ST_DMAX, ROI_Y0,
                      ROI_W + ST_DMAX, ROI_H, roi_r);
             if ((frames & 3u) == 0u)
-                printf("roi read: %u cycles, l0=%u l1=%u r0=%u r1=%u\n",
+                printf("roi: %u cyc l0=%u r0=%u | thumb1=%08x thumb2=%08x stl=%08x str=%08x\n",
                        (unsigned)(mt_rd_mcycle() - ta),
-                       (unsigned)roi_l[0], (unsigned)roi_l[1],
-                       (unsigned)roi_r[0], (unsigned)roi_r[1]);
+                       (unsigned)roi_l[0], (unsigned)roi_r[0],
+                       (unsigned)(ARES_MMIO32(0xD0002000u) & 0xFFFFu),
+                       (unsigned)(ARES_MMIO32(0xD0006000u) & 0xFFFFu),
+                       (unsigned)(ARES_MMIO32(0xD0007000u) & 0xFFu),
+                       (unsigned)(ARES_MMIO32(0xD0008000u) & 0xFFu));
         }
 
         d_q4 = st_match_roi(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,

@@ -182,8 +182,11 @@ module ares_core_complex #(
   assign b_l2_req_valid = (bstate_q == B_L2_REQ);
   assign b_l2_req_write = b_write_q;
 
+  // 0xD0xx_xxxx is the peripheral space.  It used to be only 0xD000_xxxx (64 KB),
+  // which is not enough for the two 320x240 frame windows (300 KB each): loads
+  // past 0xD000_FFFF were treated as memory and silently returned zero.
   wire b_is_mmio = ((b_addr_q[31:16] == 16'h0001) ||
-                    (b_addr_q[31:16] == 16'hD000));
+                    (b_addr_q[31:24] == 8'hD0));
   assign b_l2_req_addr = b_is_mmio ? {b_addr_q[31:2], 2'b00} : {b_addr_q[31:4], 4'b0};
   assign b_l2_rsp_ready = (bstate_q == B_L2_WAIT);
 

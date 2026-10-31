@@ -67,8 +67,13 @@ module ares_mmio_bus (
   // 0xD000_6000 : camera 2 thumbnail (read), 0x6008 : its frame counter
   wire sel_cam2   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h6);
   wire sel_cam2ctl = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'hA);
-  wire sel_stl    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h7);
-  wire sel_str    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h8);
+  // The 320x240 frames need 300 KB each, so they get 0x50000 of address space
+  // instead of a 4 KB window (a 4 KB window only covers 1024 pixels, which is
+  // why every read past the first kilobyte landed in another peripheral).
+  wire sel_stl = (req_addr >= 32'hD010_0000) && (req_addr < 32'hD015_0000);
+  wire sel_str = (req_addr >= 32'hD015_0000) && (req_addr < 32'hD01A_0000);
+  wire [17:0] st_l_idx = req_addr[19:2];
+  wire [17:0] st_r_idx = req_addr[19:2] - 18'h1_4000;
   wire sel_osd    = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h4);
   wire sel_text   = (req_addr[31:16] == 16'hD000) && (req_addr[15:12] == 4'h5);
 
@@ -195,10 +200,10 @@ module ares_mmio_bus (
             end else if (sel_stl && !req_write) begin
               // the frame memory output is registered, so the data is only
               // valid two cycles after the address (same as the thumbnails)
-              st_l_addr_q <= req_addr[19:2];
+              st_l_addr_q <= st_l_idx;
               state_q <= M_STL;
             end else if (sel_str && !req_write) begin
-              st_r_addr_q <= req_addr[19:2];
+              st_r_addr_q <= st_r_idx;
               state_q <= M_STR;
             end else begin
               if (sel_clint) rsp_data_q <= clint_rdata;
