@@ -339,9 +339,9 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
  */
 #define ST_L_BASE   0xD0100000u
 #define ST_R_BASE   0xD0150000u
-#define ROI_X0      64
-#define ROI_Y0      40
-#define ROI_W       144
+#define ROI_X0      88          /* default; find_texture() overrides it */
+#define ROI_Y0      72
+#define ROI_W       128
 #define ROI_H       96
 
 static uint8_t roi_l[ROI_W * ROI_H];
@@ -380,12 +380,49 @@ static void publish_range(uint32_t mm)
         ares_mmio_write(OSD_TEXT_BASE + (uint32_t)i * 4u, v[i]);
 }
 
+/* Pick the most textured 64x64 tile of the frame, so the demo does not depend on
+ * where the interesting object happens to be.  Samples every 8th pixel (40x24),
+ * scores 5x3 tiles by variance and returns the winner's top-left corner. */
+static void find_texture(int *ox, int *oy)
+{
+    uint8_t s[40 * 24];
+    int x, y, best = -1, bx = 1, by = 1;
+
+    for (y = 0; y < 24; y++)
+        for (x = 0; x < 40; x++)
+            s[y * 40 + x] = (uint8_t)(ARES_MMIO32(ST_L_BASE +
+                (uint32_t)((y * 10) * ST_W + (x * 8)) * 4u) & 0xFFu);
+
+    for (y = 0; y < 3; y++)
+        for (x = 0; x < 5; x++) {
+            uint32_t sum = 0, sum2 = 0;
+            int i, j, n = 0, score;
+
+            for (j = 0; j < 8; j++)
+                for (i = 0; i < 8; i++) {
+                    uint32_t v = s[(y * 8 + j) * 40 + (x * 8 + i)];
+                    sum += v;
+                    sum2 += v * v;
+                    n++;
+                }
+            score = (int)(sum2 / (uint32_t)n - (sum / (uint32_t)n) * (sum / (uint32_t)n));
+            if (score > best) { best = score; bx = x; by = y; }
+        }
+
+    *ox = bx * 64 + 32 - ROI_W / 2;
+    *oy = by * 64 + 32 - ROI_H / 2;
+    if (*ox < 0) *ox = 0;
+    if (*oy < 0) *oy = 0;
+    if (*ox > ST_W - ROI_W) *ox = ST_W - ROI_W;
+    if (*oy > ST_H - ROI_H) *oy = ST_H - ROI_H;
+}
+
 int yolo_camera_run(void)
 {
     uint32_t frames = 0, t0 = 0;
 
-    printf("stereo range: 64x64 ROI at (%d,%d), f=%d px, baseline %d mm\n",
-           ROI_X0, ROI_Y0, ST_F_PX, ST_BASELINE_MM);
+    printf("stereo range: %dx%d adaptive ROI, f=%d px, baseline %d mm\n",
+           ROI_W, ROI_H, ST_F_PX, ST_BASELINE_MM);
     ares_mmio_write(ARES_LED_ADDR, 1u);
     t0 = mt_rd_mcycle();
 
@@ -433,10 +470,26 @@ int yolo_camera_run(void)
             printf("roi luma %u..%u (contrast %u), best-block peak %u\n",
                    (unsigned)lo, (unsigned)hi, (unsigned)(hi - lo),
                    (unsigned)best);
+            {
+                /* whole stereo field of view (the central 640x480 of the 720p
+                 * picture, decimated to 320x240), sampled every 8th pixel */
+                int ax, ay;
+                for (ay = 0; ay < 24; ay++) {
+                    char row[42];
+                    for (ax = 0; ax < 40; ax++) {
+                        uint32_t addr = ST_L_BASE +
+                            (uint32_t)((ay * 10) * ST_W + (ax * 8)) * 4u;
+                        uint32_t v = ARES_MMIO32(addr) & 0xFFu;
+                        row[ax] = (v > 120) ? '#' : (v > 70 ? '+' : (v > 35 ? '.' : ' '));
+                    }
+                    row[40] = 0;
+                    printf("|%s|\n", row);
+                }
+            }
         }
 
         d_q4 = st_match_roi_step(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
-                                 0, 0, ROI_W, ROI_H, 48, &n);
+                                 0, 0, ROI_W, ROI_H, 32, &n);
         if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
 
         publish_range(z_mm);
