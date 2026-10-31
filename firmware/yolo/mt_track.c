@@ -120,12 +120,48 @@ static int find_blobs(void)
     return nb;
 }
 
+/* Fingers and a palm arrive as separate components; left alone they become two
+ * tracks that fight over the same hand.  Merge blobs whose centres are closer
+ * than MERGE_DIST cells, keeping the union bounding box. */
+#define MERGE_DIST 5
+
+static int merge_blobs(int nb)
+{
+    int i, j, changed = 1;
+
+    while (changed) {
+        changed = 0;
+        for (i = 0; i < nb; i++)
+            for (j = i + 1; j < nb; j++) {
+                int dx = blobs[i].cx - blobs[j].cx;
+                int dy = blobs[i].cy - blobs[j].cy;
+
+                if (dx * dx + dy * dy > MERGE_DIST * MERGE_DIST) continue;
+
+                blobs[i].cx = (blobs[i].cx + blobs[j].cx) / 2;
+                blobs[i].cy = (blobs[i].cy + blobs[j].cy) / 2;
+                if (blobs[j].x0 < blobs[i].x0) blobs[i].x0 = blobs[j].x0;
+                if (blobs[j].y0 < blobs[i].y0) blobs[i].y0 = blobs[j].y0;
+                if (blobs[j].x1 > blobs[i].x1) blobs[i].x1 = blobs[j].x1;
+                if (blobs[j].y1 > blobs[i].y1) blobs[i].y1 = blobs[j].y1;
+
+                blobs[j] = blobs[nb - 1];
+                nb--;
+                changed = 1;
+                break;
+            }
+        if (changed) continue;
+    }
+    return nb;
+}
+
 int trk_step(const uint8_t *prev, const uint8_t *cur, trk_t *out, int max_out)
 {
     int nb, i, j, n = 0;
 
     build_mask(prev, cur);
     nb = find_blobs();
+    nb = merge_blobs(nb);
 
     /* age the existing tracks first: anything not re-matched this frame loses a
      * point, and a track that misses too often is dropped */
@@ -134,7 +170,8 @@ int trk_step(const uint8_t *prev, const uint8_t *cur, trk_t *out, int max_out)
     }
 
     for (i = 0; i < nb; i++) {
-        int best = -1, bestd = 8 * 8;      /* association radius: 8 cells */
+        int best = -1, bestd = 12 * 12;    /* association radius: 12 cells, a
+                                            * hand can cross the frame quickly */
 
         for (j = 0; j < TRK_MAX; j++) {
             int dx, dy, d2;

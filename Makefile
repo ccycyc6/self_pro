@@ -111,3 +111,11 @@ stereo-sim: sim
 	@echo "--- stereo UART output ---"
 	@cat build/uart.log
 	@grep -q "STEREO SIM PASSED" build/uart.log
+# ------------------------------------------------------------- tracker tests
+# Synthetic 32x32 grids through the motion tracker: identity stability, merging
+# of fragments, two objects, and dropping a track when the object leaves.
+track-test:
+	mkdir -p build
+	gcc -O2 -I firmware/common -I firmware/yolo \
+	  tools/ml/test_track.c firmware/yolo/mt_track.c -o build/test_track
+	./build/test_track
