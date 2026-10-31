@@ -13,10 +13,12 @@
 // taken from the position two cycles back.
 // ---------------------------------------------------------------------------
 module video_pip #(
-    parameter integer X0 = 640,
-    parameter integer Y0 = 120,
-    parameter integer X1 = 1280,
-    parameter integer Y1 = 600
+    // 1:1 inset in the bottom-right corner: 320x240 of a 1280x720 frame.
+    parameter integer X0  = 960,
+    parameter integer Y0  = 480,
+    parameter integer X1  = 1280,
+    parameter integer Y1  = 720,
+    parameter integer SFT = 0        // 0 = 1:1, 1 = 2x zoom
 ) (
     input  wire        pix_clk,
     input  wire        rst,
@@ -32,8 +34,8 @@ module video_pip #(
     input  wire [7:0]  mem_data
 );
     wire in_rect = (x >= X0) && (x < X1) && (y >= Y0) && (y < Y1);
-    wire [11:0] sx = (x - X0) >> 1;
-    wire [11:0] sy = (y - Y0) >> 1;
+    wire [11:0] sx = (x - X0) >> SFT;
+    wire [11:0] sy = (y - Y0) >> SFT;
 
     assign mem_addr = (sy * 12'd320) + sx;
 

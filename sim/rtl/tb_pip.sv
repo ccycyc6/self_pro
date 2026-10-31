@@ -39,11 +39,11 @@ module tb_pip;
             @(posedge clk); #1;       // t+2: img_q valid, video delayed by 2
 
             checks = checks + 1;
-            if (cx >= 640 && cx < 1280 && cy >= 120 && cy < 600) begin
-                if (rgb_out[7:0] !== {((((cy - 120) / 2) * 320 + (cx - 640) / 2) * 7) & 8'hFF}) begin
+            if (cx >= 960 && cx < 1280 && cy >= 480 && cy < 720) begin
+                if (rgb_out[7:0] !== {(((cy - 480) * 320 + (cx - 960)) * 7) & 8'hFF}) begin
                     $display("FAIL inside (%0d,%0d): got %02x want %02x", cx, cy,
                              rgb_out[7:0],
-                             ((((cy - 120) / 2) * 320 + (cx - 640) / 2) * 7) & 8'hFF);
+                             (((cy - 480) * 320 + (cx - 960)) * 7) & 8'hFF);
                     errors = errors + 1;
                 end
             end else begin
@@ -62,11 +62,12 @@ module tb_pip;
         repeat (2) @(posedge clk);
 
         check_point(100, 100);      // outside
-        check_point(639, 300);      // outside, just left of the rect
-        check_point(640, 120);      // inside, top-left corner
-        check_point(641, 121);      // inside, one pixel in
-        check_point(1279, 599);     // inside, bottom-right corner
-        check_point(1279, 600);     // outside, one row below
+        check_point(959, 600);      // outside, just left of the rect
+        check_point(960, 480);      // inside, top-left corner
+        check_point(961, 481);      // inside, one pixel in
+        check_point(1279, 719);     // inside, bottom-right corner
+        check_point(1279, 479);     // outside, one row above
+        check_point(959, 719);      // outside, one column left
         check_point(300, 719);      // outside, bottom left
 
         $display("pip checks=%0d errors=%0d", checks, errors);
