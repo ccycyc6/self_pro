@@ -456,6 +456,29 @@ static void publish_count(int n)
         ares_mmio_write(OSD_TEXT_BASE + (uint32_t)i * 4u, v[i]);
 }
 
+/* ---------------------------------------------------------------- capture
+ * Recording mode: each confirmed track's normalised 32x32 patch goes out as a
+ * binary frame  A5 5A id <1024 bytes> csum.
+ * Nothing else is printed while recording -- a text line would break the
+ * framing, and the host parser relies on the fixed length plus the checksum.
+ */
+static uint8_t rec_patch[32 * 32];
+
+static void send_patch(uint8_t id)
+{
+    uint32_t sum = 0;
+    int i;
+
+    uart_putc((char)0xA5);
+    uart_putc((char)0x5A);
+    uart_putc((char)id);
+    for (i = 0; i < 32 * 32; i++) {
+        uart_putc((char)rec_patch[i]);
+        sum += rec_patch[i];
+    }
+    uart_putc((char)(sum & 0xFFu));
+}
+
 int yolo_camera_run(void)
 {
     static uint8_t prev32[TRK_GRID * TRK_GRID];
@@ -463,6 +486,8 @@ int yolo_camera_run(void)
     trk_t list[4];
     uint32_t frames = 0, t0;
     int first = 1;
+    int recording = 0;
+    uint32_t sent = 0;
 
     printf("motion tracker: 32x32 grid, threshold %d\n", 12);
     ares_mmio_write(ARES_LED_ADDR, 1u);
@@ -474,6 +499,11 @@ int yolo_camera_run(void)
         ch = uart_poll();
         if (ch == 't') trk_set_threshold(8);
         else if (ch == 'T') trk_set_threshold(20);
+        else if (ch == 'r' || ch == 'R') {
+            recording = !recording;
+            if (recording) sent = 0;
+            printf(recording ? "recording started\n" : "recording stopped\n");
+        }
 
         trk_grab(cur32);
         if (first) {
@@ -497,7 +527,13 @@ int yolo_camera_run(void)
         ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
         publish_count(n);
 
-        if ((frames & 0x03u) == 0u) {
+        if (recording) {
+            for (i = 0; i < n; i++)
+                if (trk_patch(&list[i], rec_patch)) {
+                    send_patch((uint8_t)i);
+                    sent++;
+                }
+        } else if ((frames & 0x03u) == 0u) {
             printf("tracks=%d", n);
             for (i = 0; i < n; i++)
                 printf(" [%d] %d,%d %dx%d held=%d", i, list[i].cx, list[i].cy,
@@ -507,7 +543,7 @@ int yolo_camera_run(void)
 
         /* Every eighth frame, show the normalised patch of the first track: if
          * the box is right, the hand fills the patch whatever the distance. */
-        if ((frames & 0x07u) == 0u && n > 0) {
+        if (!recording && (frames & 0x07u) == 0u && n > 0) {
             static uint8_t patch[32 * 32];
             int ax, ay;
 
