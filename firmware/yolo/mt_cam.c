@@ -341,8 +341,8 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
 #define ST_R_BASE   0xD0150000u
 #define ROI_X0      88          /* default; find_texture() overrides it */
 #define ROI_Y0      72
-#define ROI_W       128
-#define ROI_H       96
+#define ROI_W       96
+#define ROI_H       64
 
 static uint8_t roi_l[ROI_W * ROI_H];
 static uint8_t roi_r[(ROI_W + ST_DMAX) * ROI_H];
@@ -406,54 +406,98 @@ static void sample_grid(uint8_t *dst)
                 (uint32_t)((y * 8) * ST_W + (x * 8)) * 4u) & 0xFFu);
 }
 
+/* Background capture is no longer needed: the object is found by its texture,
+ * not by differing from a learned empty scene.  Kept as a no-op so the boot
+ * sequence stays the same. */
 static void bg_capture(void)
 {
-    int k, i;
-
-    for (i = 0; i < BG_W * BG_H; i++) bg[i] = 0;
-
-    for (k = 0; k < 8; k++) {
-        sample_grid(cur);
-        for (i = 0; i < BG_W * BG_H; i++)
-            bg[i] = (uint8_t)((bg[i] + cur[i]) / 2);   /* running mean */
-    }
 }
 
 /* Tallest vertical run of "subject" cells; returns its pixel height (each cell
  * is 8 pixels of the 240 line image). */
-static int subject_height_px(int *out_x)
+/* Object = the region that has texture.  A white wall has none, so gradient
+ * energy separates the object without any background model: nothing to
+ * calibrate, nothing to drift when the light changes.
+ *
+ * Returns the largest connected component's bounding box in 320x240 pixels. */
+static int find_object(int *ox0, int *oy0, int *ox1, int *oy1)
 {
-    int x, y, best = 0, bestx = -1;
-    uint32_t dsum = 0;
-    int mean;
-    uint8_t diff[BG_W * BG_H];
+    static uint8_t seen[BG_W * BG_H];
+    static int16_t stack[BG_W * BG_H];
+    uint8_t energy[BG_W * BG_H];
+    uint32_t esum = 0;
+    int mean, i, best_area = 0;
+    int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
 
-    /* Auto-exposure shifts the whole frame, which lights up every cell if the
-     * threshold is absolute.  Work relative to the frame's mean difference. */
-    for (y = 0; y < BG_H; y++)
-        for (x = 0; x < BG_W; x++) {
-            int d = (int)cur[y * BG_W + x] - (int)bg[y * BG_W + x];
-            if (d < 0) d = -d;
-            if (d > 255) d = 255;
-            diff[y * BG_W + x] = (uint8_t)d;
-            dsum += (uint32_t)d;
+    /* |dx| + |dy| of the 40x30 sample grid */
+    for (i = 0; i < BG_W * BG_H; i++) {
+        int x = i % BG_W, y = i / BG_W;
+        int gx = 0, gy = 0;
+
+        if (x + 1 < BG_W) {
+            gx = (int)cur[i + 1] - (int)cur[i];
+            if (gx < 0) gx = -gx;
         }
-    mean = (int)(dsum / (BG_W * BG_H));
+        if (y + 1 < BG_H) {
+            gy = (int)cur[i + BG_W] - (int)cur[i];
+            if (gy < 0) gy = -gy;
+        }
+        energy[i] = (uint8_t)(gx + gy > 255 ? 255 : gx + gy);
+        esum += energy[i];
+        seen[i] = 0;
+    }
+    mean = (int)(esum / (BG_W * BG_H));
 
-    for (x = 0; x < BG_W; x++) {
-        int run = 0;
-        for (y = 0; y < BG_H; y++) {
-            int d = (int)diff[y * BG_W + x] - mean;
-            if (d > BG_T) {
-                run++;
-                if (run > best) { best = run; bestx = x; }
-            } else {
-                run = 0;
+    /* a cell belongs to the object when its texture is well above the frame's */
+    {
+        int thr = mean + 10;
+        if (thr < 12) thr = 12;
+
+        for (i = 0; i < BG_W * BG_H; i++) {
+            int sp = 0, area = 0;
+            int x0 = BG_W, y0 = BG_H, x1 = 0, y1 = 0;
+
+            if (seen[i] || energy[i] <= thr) continue;
+
+            stack[sp++] = (int16_t)i;
+            seen[i] = 1;
+            while (sp > 0) {
+                int c = stack[--sp];
+                int cx = c % BG_W, cy = c / BG_W;
+                int dy, dx;
+
+                area++;
+                if (cx < x0) x0 = cx;
+                if (cx > x1) x1 = cx;
+                if (cy < y0) y0 = cy;
+                if (cy > y1) y1 = cy;
+
+                for (dy = -1; dy <= 1; dy++)
+                    for (dx = -1; dx <= 1; dx++) {
+                        int nx = cx + dx, ny = cy + dy, ni;
+                        if (nx < 0 || ny < 0 || nx >= BG_W || ny >= BG_H) continue;
+                        ni = ny * BG_W + nx;
+                        if (!seen[ni] && energy[ni] > thr) {
+                            seen[ni] = 1;
+                            stack[sp++] = (int16_t)ni;
+                        }
+                    }
+            }
+
+            if (area > best_area) {
+                best_area = area;
+                bx0 = x0; by0 = y0; bx1 = x1; by1 = y1;
             }
         }
     }
-    if (out_x) *out_x = bestx;
-    return best * 8;
+
+    if (best_area < 4) return 0;
+
+    *ox0 = bx0 * 8;
+    *oy0 = by0 * 8;
+    *ox1 = bx1 * 8 + 7;
+    *oy1 = by1 * 8 + 7;
+    return 1;
 }
 
 /* Pick the most textured 64x64 tile of the frame, so the demo does not depend on
@@ -501,6 +545,8 @@ int yolo_camera_run(void)
            ROI_W, ROI_H, ST_F_PX, ST_BASELINE_MM);
     ares_mmio_write(ARES_LED_ADDR, 1u);
     t0 = mt_rd_mcycle();
+
+    uint32_t no_object = 0;
 
     for (;;) {
         int n = 0;
@@ -564,24 +610,70 @@ int yolo_camera_run(void)
             }
         }
 
-        d_q4 = st_match_roi_step(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
-                                 0, 0, ROI_W, ROI_H, 32, &n);
-        if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
-
         sample_grid(cur);
         {
-            int hx = -1;
-            int v_px = subject_height_px(&hx);
+            int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+            int ox = ROI_X0, oy = ROI_Y0;
             uint32_t h_cm = 0;
+            int have = find_object(&bx0, &by0, &bx1, &by1);
 
-            if (z_mm && v_px > 16) {
-                uint32_t h_mm = (uint32_t)(((uint64_t)z_mm * (uint32_t)v_px) / ST_F_PX);
-                h_cm = h_mm / 10u;
+            if (have) no_object = 0;
+
+            if (have) {
+                ox = (bx0 + bx1) / 2 - ROI_W / 2;
+                oy = (by0 + by1) / 2 - ROI_H / 2;
+                if (ox < 0) ox = 0;
+                if (oy < 0) oy = 0;
+                if (ox > ST_W - ROI_W) ox = ST_W - ROI_W;
+                if (oy > ST_H - ROI_H) oy = ST_H - ROI_H;
             }
+
+            read_roi(ST_L_BASE, ox, oy, ROI_W, ROI_H, roi_l);
+            read_roi(ST_R_BASE, ox - ST_DMAX, oy,
+                     ROI_W + ST_DMAX, ROI_H, roi_r);
+
+            d_q4 = st_match_roi_step(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
+                                     0, 0, ROI_W, ROI_H, 32, &n);
+            if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
+
+            if (have) {
+                int v_px = by1 - by0 + 1;
+                int edge = (by0 <= 1) || (by1 >= ST_H - 2);
+
+                if (z_mm && v_px > 12 && !edge) {
+                    uint32_t h_mm = (uint32_t)(((uint64_t)z_mm * (uint32_t)v_px) / ST_F_PX);
+                    h_cm = h_mm / 10u;
+                }
+
+                /* object box on the HDMI picture: the stereo crop sits at
+                 * (320,80) and the picture is twice the 320x240 grid */
+                ares_mmio_write(OSD_BOX_BASE + 0u,  (uint32_t)(320 + bx0 * 2));
+                ares_mmio_write(OSD_BOX_BASE + 4u,  (uint32_t)(80 + by0 * 2));
+                ares_mmio_write(OSD_BOX_BASE + 8u,  (uint32_t)(320 + bx1 * 2));
+                ares_mmio_write(OSD_BOX_BASE + 12u, (uint32_t)(80 + by1 * 2));
+                ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
+
+                if ((frames & 0x07u) == 0u)
+                    printf("object (%d,%d)-(%d,%d) v_px=%d d_q4=%d z=%u h=%u%s\n",
+                           bx0, by0, bx1, by1, v_px, (int)d_q4,
+                           (unsigned)z_mm, (unsigned)h_cm, edge ? " edge" : "");
+            } else {
+                ares_mmio_write(OSD_BOX_BASE + 0u, 0u);
+                ares_mmio_write(OSD_BOX_BASE + 4u, 0u);
+                ares_mmio_write(OSD_BOX_BASE + 8u, 0u);
+                ares_mmio_write(OSD_BOX_BASE + 12u, 0u);
+                ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
+
+                /* Deliberately no automatic re-capture: a static object does
+                 * not move, so re-learning "because nothing is seen" would
+                 * learn the object as background and it would never come back.
+                 * The background is taken once at boot -- start with an empty
+                 * scene. */
+                no_object = 0;
+                if ((frames & 0x07u) == 0u) printf("no object\n");
+            }
+
             publish_metrics(z_mm, h_cm);
-            if ((frames & 0x07u) == 0u)
-                printf("height: v_px=%d col=%d h_cm=%u\n",
-                       v_px, hx, (unsigned)h_cm);
         }
 
         frames++;
