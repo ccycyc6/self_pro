@@ -1,15 +1,15 @@
 `timescale 1ns/1ps
 // ---------------------------------------------------------------------------
-// stereo_cap - 320x240 luma image for one eye of the stereo pair.
+// stereo_cap - 320x240 luma image from one camera.
 //
-// 32x32 is far too coarse for disparity: with a 60 degree lens a 32-cell-wide
-// image has f = 27 px, so at 2 m the whole parallax is 0.8 px.  At 320 cells
-// wide f = 275 px and the parallax is 9.6 px, which is what makes depth (and
-// therefore height) possible at all.
+// The 32x32 thumbnails cannot measure parallax (f = 27 px, so 2 m of distance
+// is under one pixel of disparity).  This module crops the centre 640x480 of
+// the 1280x720 stream and decimates 2:1 on both axes: f = 275 px, and 2 m
+// becomes a 9.6 pixel disparity.
 //
-// Crop: x in [320,960), y in [80,560)  -> 640x480, then 2:1 on both axes.
-// Luma only (one byte per pixel): the matcher does not need colour, and this
-// keeps the buffer at 75 KB per eye instead of 150 KB.
+// Addressing is row * 320 + col, the layout the readers and the CPU use.
+// Getting this wrong (row * 256, and a crop anchored at 0,0 instead of the
+// centre) is what made the first inset look like diagonal stripes.
 // ---------------------------------------------------------------------------
 module stereo_cap (
     input  wire        pixel_clk,
@@ -24,94 +24,77 @@ module stereo_cap (
     output reg         frame_tog,
     output reg  [31:0] wr_cnt
 );
-    localparam [11:0] CROP_W = 12'd640;   // x span
-    localparam [11:0] CROP_H = 12'd480;   // y span
+    localparam [11:0] X0 = 12'd320;   // crop origin in the 1280 wide frame
+    localparam [11:0] Y0 = 12'd80;    // and in the 720 line frame
+    localparam [11:0] CW = 12'd640;   // crop size
+    localparam [11:0] CH = 12'd480;
 
     reg        de_d;
-    reg [11:0] x_cnt;      // pixel index inside the crop
-    reg [11:0] y_cnt;      // line index inside the crop
-    reg        ph;         // 0 = first pixel/line of a cell pair
-    reg        acc_line;   // this line contributes a row
-    reg [8:0]  row;        // 0..239
-    reg [8:0]  col;        // 0..319
+    reg [11:0] x_cnt;                 // 0..1279 visible pixels
+    reg [11:0] y_cnt;                 // 0..719 visible lines
+    reg        phase_x, phase_y;      // 2:1 decimation
     reg        vsync_d;
 
     wire de_rise = pixel_de && !de_d;
 
-    // Luma with shifts and adds only.  The proper BT.601 form needs three
-    // multipliers (77/151/28), and that combination was a 26 ns path in this
-    // fabric -- it showed up as a -2.2 ns violation.  R + 2G + B is just as
-    // usable for matching, which only needs a consistent brightness channel.
     wire [4:0] r5 = pixel_rgb565[15:11];
     wire [5:0] g6 = pixel_rgb565[10:5];
     wire [4:0] b5 = pixel_rgb565[4:0];
 
-    // RGB565 -> 8-bit channels are just zero-extension, and dividing the sum
-    // by four cancels it: (r8 + 2*g8 + b8)/4 = 2*(r5 + g6 + b5).
+    // (r8 + 2*g8 + b8)/4 with 8-bit channels cancels the expansion:
+    // = 2*(r5 + g6 + b5), no multipliers.
     wire [7:0] r2 = {2'b00, r5, 1'b0};
     wire [7:0] g2 = {1'b0, g6, 1'b0};
     wire [7:0] b2 = {2'b00, b5, 1'b0};
-    wire [7:0] luma = r2 + g2 + b2;      // <= 250
+    wire [7:0] luma = r2 + g2 + b2;
+
+    wire in_crop_x = (x_cnt >= X0) && (x_cnt < X0 + CW);
+    wire in_crop_y = (y_cnt >= Y0) && (y_cnt < Y0 + CH);
+
+    wire [16:0] col = (x_cnt - X0) >> 1;             // 0..319
+    wire [16:0] row = (y_cnt - Y0) >> 1;             // 0..239
+    wire [16:0] addr = row * 17'd320 + col;
 
     always @(posedge pixel_clk) begin
         if (pixel_rst) begin
-            de_d      <= 1'b0;
-            x_cnt     <= 12'd0;
-            y_cnt     <= 12'd0;
-            ph        <= 1'b0;
-            acc_line  <= 1'b0;
-            row       <= 9'd0;
-            col       <= 9'd0;
-            vsync_d   <= 1'b0;
-            wr_en     <= 1'b0;
-            wr_addr   <= 17'd0;
-            wr_data   <= 8'd0;
+            de_d    <= 1'b0;
+            x_cnt   <= 12'd0;
+            y_cnt   <= 12'd0;
+            phase_x <= 1'b0;
+            phase_y <= 1'b0;
+            vsync_d <= 1'b0;
+            wr_en   <= 1'b0;
+            wr_addr <= 17'd0;
+            wr_data <= 8'd0;
             frame_tog <= 1'b0;
-            wr_cnt    <= 32'd0;
+            wr_cnt  <= 32'd0;
         end else begin
             de_d  <= pixel_de;
             wr_en <= 1'b0;
 
             if (de_rise) begin
-                // ---------------------------------------------- line start
-                x_cnt <= 12'd0;
-                ph    <= 1'b0;
-                col   <= 9'd0;
-
-                if (y_cnt < CROP_H) begin
-                    acc_line <= ~acc_line;      // take every second line
-                    if (y_cnt == CROP_H - 12'd1) begin
-                        y_cnt <= 12'd0;
-                        row   <= 9'd0;
-                    end else begin
-                        y_cnt <= y_cnt + 12'd1;
-                        if (acc_line) row <= row + 9'd1;
-                    end
-                end else begin
-                    acc_line <= 1'b0;
-                end
+                x_cnt   <= 12'd0;
+                phase_x <= 1'b0;
+                if (y_cnt == 12'd719) y_cnt <= 12'd0;
+                else                  y_cnt <= y_cnt + 12'd1;
+                phase_y <= ~phase_y;
             end else if (pixel_de) begin
                 x_cnt <= x_cnt + 12'd1;
-                ph    <= ~ph;
+                phase_x <= ~phase_x;
 
-                // every second pixel of every second line becomes a cell
-                if (!ph && acc_line && (x_cnt < CROP_W)) begin
+                // every second pixel of every second line inside the crop
+                if (!phase_x && phase_y && in_crop_x && in_crop_y) begin
                     wr_en   <= 1'b1;
-                    wr_addr <= {row, col[7:0]};   // 9 + 8 = 17 bits
+                    wr_addr <= addr;
                     wr_data <= luma;
                     wr_cnt  <= wr_cnt + 32'd1;
-                    if (col == 9'd319) col <= 9'd0;
-                    else               col <= col + 9'd1;
                 end
             end
 
             vsync_d <= pixel_vsync;
             if (pixel_vsync && !vsync_d) begin
                 y_cnt     <= 12'd0;
-                row       <= 9'd0;
-                col       <= 9'd0;
-                ph        <= 1'b0;
-                acc_line  <= 1'b0;
+                phase_y   <= 1'b0;
                 frame_tog <= ~frame_tog;
             end
         end
