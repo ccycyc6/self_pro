@@ -40,4 +40,17 @@ int32_t st_match_roi(const uint8_t *left, int lw,
                      const uint8_t *right, int rw,
                      int x0, int y0, int x1, int y1, int *count);
 
+/* Same with a block stride, so a few blocks can be spread over a wide region
+ * instead of clustering on one patch of wall. */
+int32_t st_match_roi_step(const uint8_t *left, int lw,
+                          const uint8_t *right, int rw,
+                          int x0, int y0, int x1, int y1, int step,
+                          int *count);
+
+/* Diagnostics: the SAD curve of one block.  Returns the number of entries
+ * written (min(dmax, n) + 1) and the min/max through the pointers. */
+int st_block_curve(const uint8_t *left, int lw, const uint8_t *right, int rw,
+                   int x, int y, uint32_t *cost, int n,
+                   uint32_t *lo, uint32_t *hi);
+
 #endif

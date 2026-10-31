@@ -220,3 +220,47 @@ int32_t st_match_roi(const uint8_t *left, int lw,
     }
     return vals[n / 2];
 }
+
+int32_t st_match_roi_step(const uint8_t *left, int lw,
+                          const uint8_t *right, int rw,
+                          int x0, int y0, int x1, int y1, int step,
+                          int *count)
+{
+    int32_t vals[64];
+    int n = 0, x, y, i, j;
+
+    if (step < ST_BLOCK) step = ST_BLOCK;
+    for (y = y0; y + ST_BLOCK <= y1 && n < 64; y += step) {
+        for (x = x0; x + ST_BLOCK <= x1 && n < 64; x += step) {
+            int32_t d = match_roi_block(left, lw, right, rw, x, y);
+            if (d >= 0) vals[n++] = d;
+        }
+    }
+    if (count) *count = n;
+    if (n == 0) return -1;
+
+    for (i = 1; i < n; i++) {
+        int32_t v = vals[i];
+        for (j = i - 1; j >= 0 && vals[j] > v; j--) vals[j + 1] = vals[j];
+        vals[j + 1] = v;
+    }
+    return vals[n / 2];
+}
+
+int st_block_curve(const uint8_t *left, int lw, const uint8_t *right, int rw,
+                   int x, int y, uint32_t *cost, int n,
+                   uint32_t *lo, uint32_t *hi)
+{
+    int d;
+    uint32_t l = 0xFFFFFFFFu, h = 0;
+
+    if (n > ST_DMAX + 1) n = ST_DMAX + 1;
+    for (d = 0; d < n; d++) {
+        cost[d] = sad_roi(left, lw, right, rw, x, y, d);
+        if (cost[d] < l) l = cost[d];
+        if (cost[d] > h) h = cost[d];
+    }
+    if (lo) *lo = l;
+    if (hi) *hi = h;
+    return n;
+}

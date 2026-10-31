@@ -339,10 +339,10 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
  */
 #define ST_L_BASE   0xD0100000u
 #define ST_R_BASE   0xD0150000u
-#define ROI_X0      96
-#define ROI_Y0      60
-#define ROI_W       48
-#define ROI_H       32
+#define ROI_X0      64
+#define ROI_Y0      40
+#define ROI_W       144
+#define ROI_H       96
 
 static uint8_t roi_l[ROI_W * ROI_H];
 static uint8_t roi_r[(ROI_W + ST_DMAX) * ROI_H];
@@ -409,8 +409,34 @@ int yolo_camera_run(void)
                        (unsigned)(ARES_MMIO32(0xD0008000u) & 0xFFu));
         }
 
-        d_q4 = st_match_roi(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
-                            0, 0, ROI_W, ROI_H, &n);
+        if ((frames & 0x07u) == 0u) {
+            /* how much texture is in the ROI at all, and where the best block
+             * sits: without contrast there is nothing to match. */
+            uint32_t lo = 255, hi = 0, i2, best = 0;
+            int bx = 0, by = 0, x2, y2;
+
+            for (i2 = 0; i2 < (uint32_t)(ROI_W * ROI_H); i2++) {
+                if (roi_l[i2] < lo) lo = roi_l[i2];
+                if (roi_l[i2] > hi) hi = roi_l[i2];
+            }
+            for (y2 = 0; y2 + 8 <= ROI_H; y2 += 24)
+                for (x2 = 0; x2 + 8 <= ROI_W; x2 += 24) {
+                    uint32_t cost[ST_DMAX + 1], l2 = 0, h2 = 0;
+                    int k;
+                    int nb = st_block_curve(roi_l, ROI_W, roi_r,
+                                            ROI_W + ST_DMAX, x2, y2,
+                                            cost, ST_DMAX + 1, &l2, &h2);
+                    for (k = 0; k < nb; k++)
+                        if (cost[k] > best) best = cost[k];
+                    (void)l2;
+                }
+            printf("roi luma %u..%u (contrast %u), best-block peak %u\n",
+                   (unsigned)lo, (unsigned)hi, (unsigned)(hi - lo),
+                   (unsigned)best);
+        }
+
+        d_q4 = st_match_roi_step(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
+                                 0, 0, ROI_W, ROI_H, 48, &n);
         if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
 
         publish_range(z_mm);
