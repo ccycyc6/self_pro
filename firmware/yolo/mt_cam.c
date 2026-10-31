@@ -363,8 +363,8 @@ static void read_roi(uint32_t base, int x0, int y0, int w, int h, uint8_t *dst)
     }
 }
 
-/* "2.34" in the OSD text row: metres with two decimals. */
-static void publish_range(uint32_t mm)
+/* "1.50 172" on the text row: distance in metres, height in centimetres. */
+static void publish_metrics(uint32_t mm, uint32_t height_cm)
 {
     uint32_t cm = mm / 10u;
     uint32_t v[8];
@@ -374,10 +374,86 @@ static void publish_range(uint32_t mm)
     v[1] = 13u;                       /* separator dot */
     v[2] = (cm / 10u) % 10u;
     v[3] = cm % 10u;
-    for (i = 4; i < 8; i++) v[i] = GLYPH_SPACE;
+    v[4] = GLYPH_SPACE;
+    v[5] = (height_cm / 100u) % 10u;
+    v[6] = (height_cm / 10u) % 10u;
+    v[7] = height_cm % 10u;
 
     for (i = 0; i < 8; i++)
         ares_mmio_write(OSD_TEXT_BASE + (uint32_t)i * 4u, v[i]);
+}
+
+/* ---------------------------------------------------------- G7: height
+ * Background subtraction on a 40x30 grid of the same 320x240 crop the stereo
+ * pair uses (one sample per 8x8 cell), so the silhouette and the distance refer
+ * to the same field of view.  The camera is fixed and the wall is static, which
+ * is exactly the case where this beats any learned detector on cost.
+ */
+#define BG_W 40
+#define BG_H 30
+#define BG_T 14           /* per-cell luma difference that counts as "subject" */
+
+static uint8_t bg[BG_W * BG_H];
+static uint8_t cur[BG_W * BG_H];
+
+static void sample_grid(uint8_t *dst)
+{
+    int x, y;
+
+    for (y = 0; y < BG_H; y++)
+        for (x = 0; x < BG_W; x++)
+            dst[y * BG_W + x] = (uint8_t)(ARES_MMIO32(ST_L_BASE +
+                (uint32_t)((y * 8) * ST_W + (x * 8)) * 4u) & 0xFFu);
+}
+
+static void bg_capture(void)
+{
+    int k, i;
+
+    for (i = 0; i < BG_W * BG_H; i++) bg[i] = 0;
+
+    for (k = 0; k < 8; k++) {
+        sample_grid(cur);
+        for (i = 0; i < BG_W * BG_H; i++)
+            bg[i] = (uint8_t)((bg[i] + cur[i]) / 2);   /* running mean */
+    }
+}
+
+/* Tallest vertical run of "subject" cells; returns its pixel height (each cell
+ * is 8 pixels of the 240 line image). */
+static int subject_height_px(int *out_x)
+{
+    int x, y, best = 0, bestx = -1;
+    uint32_t dsum = 0;
+    int mean;
+    uint8_t diff[BG_W * BG_H];
+
+    /* Auto-exposure shifts the whole frame, which lights up every cell if the
+     * threshold is absolute.  Work relative to the frame's mean difference. */
+    for (y = 0; y < BG_H; y++)
+        for (x = 0; x < BG_W; x++) {
+            int d = (int)cur[y * BG_W + x] - (int)bg[y * BG_W + x];
+            if (d < 0) d = -d;
+            if (d > 255) d = 255;
+            diff[y * BG_W + x] = (uint8_t)d;
+            dsum += (uint32_t)d;
+        }
+    mean = (int)(dsum / (BG_W * BG_H));
+
+    for (x = 0; x < BG_W; x++) {
+        int run = 0;
+        for (y = 0; y < BG_H; y++) {
+            int d = (int)diff[y * BG_W + x] - mean;
+            if (d > BG_T) {
+                run++;
+                if (run > best) { best = run; bestx = x; }
+            } else {
+                run = 0;
+            }
+        }
+    }
+    if (out_x) *out_x = bestx;
+    return best * 8;
 }
 
 /* Pick the most textured 64x64 tile of the frame, so the demo does not depend on
@@ -492,7 +568,21 @@ int yolo_camera_run(void)
                                  0, 0, ROI_W, ROI_H, 32, &n);
         if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
 
-        publish_range(z_mm);
+        sample_grid(cur);
+        {
+            int hx = -1;
+            int v_px = subject_height_px(&hx);
+            uint32_t h_cm = 0;
+
+            if (z_mm && v_px > 16) {
+                uint32_t h_mm = (uint32_t)(((uint64_t)z_mm * (uint32_t)v_px) / ST_F_PX);
+                h_cm = h_mm / 10u;
+            }
+            publish_metrics(z_mm, h_cm);
+            if ((frames & 0x07u) == 0u)
+                printf("height: v_px=%d col=%d h_cm=%u\n",
+                       v_px, hx, (unsigned)h_cm);
+        }
 
         frames++;
         if ((frames & 3u) == 0u) {
