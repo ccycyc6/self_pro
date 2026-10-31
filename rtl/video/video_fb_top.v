@@ -145,6 +145,23 @@ module video_fb_top #(
         .iic_sda        (iic_tx_sda)
     );
 
+    // ------------------------------------------------ camera 2 inset (PiP)
+    wire [23:0] pip_rgb_out;
+    wire [23:0] pip_rgb_in = {hdmi_r, hdmi_g, hdmi_b};
+    wire [16:0] pip_addr;
+
+    video_pip u_pip (
+        .pix_clk (clk_pix),
+        .rst     (rst_pix),
+        .x       (hdmi_x_act),
+        .y       (hdmi_y_act),
+        .de      (de_out),
+        .rgb_in  (pip_rgb_in),
+        .rgb_out (pip_rgb_out),
+        .mem_addr(pip_addr),
+        .mem_data(pip_rd_data)
+    );
+
     video_osd u_osd (
         .pix_clk   (clk_pix),
         .pix_rst   (rst_pix),
@@ -154,9 +171,9 @@ module video_fb_top #(
         .boxes     (osd_boxes_w),
         .box_tog   (osd_tog_w),
         .text_chars(osd_text_w),
-        .r_in      (hdmi_r),
-        .g_in      (hdmi_g),
-        .b_in      (hdmi_b),
+        .r_in      (pip_rgb_out[23:16]),
+        .g_in      (pip_rgb_out[15:8]),
+        .b_in      (pip_rgb_out[7:0]),
         .r_out     (r_out),
         .g_out     (g_out),
         .b_out     (b_out)
@@ -829,6 +846,36 @@ module video_fb_top #(
 
     assign st_r_fifo_rd = !st_r_fifo_empty;
     assign st_r_rd_addr = cam_r_rd_addr;
+
+    // ------------------------------------------------ camera 2 inset buffer
+    // A second tap of the same capture stream, carried into the HDMI pixel
+    // domain through its own asynchronous FIFO, so the inset memory has a
+    // single clock (write from the FIFO, read by the overlay).
+    wire        pip_fifo_empty, pip_fifo_rd;
+    wire [24:0] pip_fifo_word;
+
+    cam_fifo #(
+        .WIDTH(25), .AW(6), .DEPTH(64)
+    ) u_pip_fifo (
+        .wr_clk (cam2_pixclk), .wr_rst (cam2_pixrst),
+        .wr_en  (st_r_wr_en),  .wr_data({st_r_addr, st_r_data}),
+        .full   (),
+        .rd_clk (clk_pix),     .rd_rst (rst_pix),
+        .rd_en  (pip_fifo_rd), .rd_data(pip_fifo_word),
+        .empty  (pip_fifo_empty)
+    );
+
+    wire [7:0] pip_rd_data;
+
+    pip_buf u_pip_buf (
+        .pix_clk   (clk_pix),
+        .rst       (rst_pix),
+        .fifo_data (pip_fifo_word),
+        .fifo_empty(pip_fifo_empty),
+        .fifo_rd_en(pip_fifo_rd),
+        .rd_addr   (pip_addr),
+        .rd_data   (pip_rd_data)
+    );
 
     // Completed-frame counter on the SoC clock (toggle synchroniser).
     reg [2:0]  cam_tog_sync;
