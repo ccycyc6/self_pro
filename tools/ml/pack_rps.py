@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Pack the trained rock/paper/scissors classifier for the accelerator.
+
+Same quantisation scheme as pack_weights.py (per-layer scales, INT8 weights,
+epilogue mult/shift), but the head now carries three class scores instead of
+the detector's object map, and the quality metric is classification accuracy on
+the integer model rather than a centroid error.
+
+Emits firmware/yolo/rps_weights.h with the same symbol names the firmware
+already uses (det_wtN / det_biasN / det_cfgN), so the runtime path is unchanged.
+"""
+import sys
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools" / "model"))
+
+import pack_weights as pw   # reuse the row packing and cfg builder
+
+CLASSES = ["rock", "paper", "scissors"]
+
+
+def carr(name, data):
+    body = ",".join(str(int(v)) for v in np.asarray(data).reshape(-1))
+    return "static const unsigned char %s[%d] = {%s};\n" % \
+        (name, np.asarray(data).size, body)
+
+
+def expand(x):
+    """(N,32,32) uint8 luma -> (N,32,32,4) float, replicated like the firmware."""
+    f = x.astype(np.float32)
+    out = np.zeros((len(x), 32, 32, 4), np.float32)
+    out[:, :, :, 0] = f
+    out[:, :, :, 1] = f
+    out[:, :, :, 2] = f
+    return out
+
+
+def main():
+    d = np.load(ROOT / "build" / "rps_float.npz")
+    w = [d["w1"], d["w2"], d["w3"]]
+    b = [d["b1"], d["b2"], d["b3"]]
+    wh = d["wh"]
+    bh = d["bh"]
+
+    ds = np.load(ROOT / "build" / "rps_dataset.npz")
+    x = ds["x"]
+    y = ds["y"]
+    rng = np.random.default_rng(5)
+    idx = rng.choice(len(x), min(120, len(x)), replace=False)
+    xcal = expand(x[idx])
+    ycal = y[idx]
+
+    # calibration: activation ranges on the calibration set
+    mx = [0.0, 0.0, 0.0, 0.0]
+    head_w = wh.reshape(8, 16, 1, 1)
+    for i in range(len(xcal)):
+        a = xcal[i]
+        for li in range(3):
+            L = pw.LAYERS[li]
+            a = pw.conv_float(a, w[li], b[li], L["pad"])
+            if L["relu"]:
+                a = np.maximum(a, 0.0)
+            mx[li] = max(mx[li], float(np.max(np.abs(a))))
+            if li < 2:
+                a = pw.pool2(a)
+        o = pw.conv_float(a, head_w, bh, 0)
+        mx[3] = max(mx[3], float(np.max(np.abs(o))))
+
+    mx0 = max(float(np.max(np.abs(xcal))), 1e-6)
+    s_in = [mx0 / 127.0] + [m / 127.0 for m in mx]
+
+    packed = []
+    for li, L in enumerate(pw.LAYERS):
+        ww = [w[0], w[1], w[2], head_w][li]
+        bb = [b[0], b[1], b[2], bh][li]
+        wq, s_w = pw.quant(ww)
+        s_x_in, s_x_out = s_in[li], s_in[li + 1]
+        ratio = s_x_in * s_w / s_x_out
+        shift = 0
+        while shift < pw.SHIFT_MAX and ratio * (1 << (shift + 1)) <= pw.MULT_MAX:
+            shift += 1
+        mult = max(1, min(pw.MULT_MAX, int(round(ratio * (1 << shift)))))
+        bq = np.round(bb / (s_x_in * s_w)).astype(np.int32)
+        nmt = pw.choose_nmt(L)
+        wt, bias, cfg = pw.to_rows(wq, L, mult, shift, bq, 0, L["relu"], nmt)
+        packed.append(dict(wt=wt, bias=bias, cfg=cfg, bias_q=bq, nmt=nmt,
+                           mult=mult, shift=shift, zp=0, relu=L["relu"]))
+        print(f"L{li + 1}: s_in={s_x_in:.5f} s_w={s_w:.5f} s_out={s_x_out:.5f} "
+              f"mult={mult} shift={shift} nmt={nmt}")
+
+    # integer model, classification accuracy
+    ok = 0
+    conf = np.zeros((3, 3), int)
+    for i in range(len(xcal)):
+        flat = np.round(xcal[i] / s_in[0]).astype(np.int32)
+        flat = np.clip(flat, -128, 127)
+        raw = (flat.reshape(-1) & 0xFF).astype(np.uint8)
+        out = pw.int_forward(raw, packed)
+        # Head layout: two groups of four channels, each an 8x8 map.  Channel c
+        # lives in group c//4, lane c%4; the classifier averages the map, which
+        # is the global average pooling the network was trained with.
+        scores = []
+        for c in range(3):
+            g, lane = c // 4, c % 4
+            block = out[g * 256:(g + 1) * 256].reshape(8, 8, 4)
+            scores.append(int(np.mean(block[:, :, lane].astype(np.int8))))
+        scores = np.array(scores, np.int32)
+        pred = int(np.argmax(scores))
+        conf[int(ycal[i]), pred] += 1
+        ok += int(pred == int(ycal[i]))
+
+    print(f"\ninteger model accuracy on {len(xcal)} calibration patches: "
+          f"{ok / len(xcal) * 100:.1f}%")
+    print("confusion (rows truth, cols prediction):")
+    print(conf)
+
+    ns = 8
+    imgs = np.zeros((ns, 32 * 32 * 4), dtype=np.uint8)
+    gold = np.zeros((ns, 64 * 8), dtype=np.uint8)
+    for i in range(ns):
+        flat = np.round(xcal[i] / s_in[0]).astype(np.int32)
+        flat = np.clip(flat, -128, 127)
+        imgs[i] = (flat.reshape(-1) & 0xFF).astype(np.uint8)
+        gold[i] = (pw.int_forward(imgs[i], packed).reshape(-1) & 0xFF).astype(np.uint8)
+
+    out_path = ROOT / "firmware/yolo/rps_weights.h"
+    with open(out_path, "w") as f:
+        f.write("/* Auto-generated by tools/ml/pack_rps.py -- do not edit. */\n")
+        f.write("#ifndef RPS_WEIGHTS_H\n#define RPS_WEIGHTS_H\n\n")
+        f.write("#define RPS_CLASSES 3\n\n")
+        for li, p in enumerate(packed):
+            f.write(carr("det_wt%d" % (li + 1), p["wt"]))
+            f.write(carr("det_bias%d" % (li + 1), p["bias"]))
+            f.write(carr("det_cfg%d" % (li + 1), p["cfg"]))
+            f.write("\n")
+        f.write(carr("rps_imgs", imgs))
+        f.write("\n")
+        f.write(carr("rps_gold", gold))
+        f.write("\n#endif\n")
+    print(f"wrote {out_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
