@@ -31,6 +31,12 @@ typedef struct {
  * same way, which is what a classifier needs.  Returns 0 if the box is empty. */
 int trk_patch(const trk_t *t, uint8_t *out32);
 
+/* Refit a track's box to the whole object instead of just its moving edge.
+ * Motion only shows where the hand moved, so the box ends up smaller than the
+ * hand; this looks at the still picture around the track, keeps the cells that
+ * are clearly darker than their surroundings and takes the largest blob. */
+void trk_fit(trk_t *t, const uint8_t *grid);
+
 /* Build the 32x32 luma grid by averaging four samples per cell.  That is 4096
  * bus reads (about 20k cycles), against 76800 for the full image. */
 void trk_grab(uint8_t *dst);

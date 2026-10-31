@@ -482,6 +482,7 @@ int yolo_camera_run(void)
         }
 
         n = trk_step(prev32, cur32, list, 4);
+        for (i = 0; i < n; i++) trk_fit(&list[i], cur32);
 
         for (i = 0; i < 4; i++) {
             if (i < n) draw_track(&list[i], (uint32_t)i);

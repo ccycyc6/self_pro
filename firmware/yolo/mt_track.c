@@ -56,6 +56,80 @@ int trk_patch(const trk_t *t, uint8_t *out32)
     return 1;
 }
 
+void trk_fit(trk_t *t, const uint8_t *grid)
+{
+    static uint8_t seen[TRK_GRID * TRK_GRID];
+    int wx0, wy0, wx1, wy1, x, y, i;
+    uint32_t sum = 0;
+    int n = 0, mean, thr;
+    int best_area = 0, bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+
+    wx0 = t->cx - 9; if (wx0 < 0) wx0 = 0;
+    wy0 = t->cy - 9; if (wy0 < 0) wy0 = 0;
+    wx1 = t->cx + 9; if (wx1 > TRK_GRID - 1) wx1 = TRK_GRID - 1;
+    wy1 = t->cy + 9; if (wy1 > TRK_GRID - 1) wy1 = TRK_GRID - 1;
+
+    for (y = wy0; y <= wy1; y++)
+        for (x = wx0; x <= wx1; x++) {
+            sum += grid[y * TRK_GRID + x];
+            n++;
+            seen[y * TRK_GRID + x] = 0;
+        }
+    if (n == 0) return;
+    mean = (int)(sum / (uint32_t)n);
+
+    /* a hand in front of a bright wall is clearly darker than the wall */
+    thr = mean - 18;
+    if (thr < 30) thr = 30;
+
+    for (y = wy0; y <= wy1; y++)
+        for (x = wx0; x <= wx1; x++) {
+            int idx = y * TRK_GRID + x;
+            int sp = 0, area = 0;
+            int x0 = TRK_GRID, y0 = TRK_GRID, x1 = 0, y1 = 0;
+
+            if (seen[idx] || (int)grid[idx] > thr) continue;
+
+            stack[sp++] = (int16_t)idx;
+            seen[idx] = 1;
+            while (sp > 0) {
+                int c2 = stack[--sp];
+                int cx = c2 % TRK_GRID, cy = c2 / TRK_GRID;
+                int dy, dx;
+
+                area++;
+                if (cx < x0) x0 = cx;
+                if (cx > x1) x1 = cx;
+                if (cy < y0) y0 = cy;
+                if (cy > y1) y1 = cy;
+
+                for (dy = -1; dy <= 1; dy++)
+                    for (dx = -1; dx <= 1; dx++) {
+                        int nx = cx + dx, ny = cy + dy, ni;
+                        if (nx < wx0 || ny < wy0 || nx > wx1 || ny > wy1) continue;
+                        ni = ny * TRK_GRID + nx;
+                        if (!seen[ni] && (int)grid[ni] <= thr) {
+                            seen[ni] = 1;
+                            stack[sp++] = (int16_t)ni;
+                        }
+                    }
+            }
+
+            if (area > best_area) {
+                best_area = area;
+                bx0 = x0; by0 = y0; bx1 = x1; by1 = y1;
+            }
+        }
+
+    if (best_area < 3) return;                 /* nothing solid found */
+
+    t->cx = (bx0 + bx1) / 2;
+    t->cy = (by0 + by1) / 2;
+    t->w  = bx1 - bx0 + 1;
+    t->h  = by1 - by0 + 1;
+    (void)i;
+}
+
 void trk_set_threshold(int t)
 {
     if (t < 1) t = 1;
