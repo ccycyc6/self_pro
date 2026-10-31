@@ -179,6 +179,20 @@ static int32_t match_roi_block(const uint8_t *l, int lw,
     if (hi - lo < 6u * ST_BLOCK * ST_BLOCK) return -1;
     if (lo > 40u * ST_BLOCK * ST_BLOCK) return -1;
 
+    /* A clear winner beats the best cost that is at least two pixels away.
+     * Without this a tie between two similar depths flips the answer from frame
+     * to frame, which is exactly what the readout did. */
+    {
+        uint32_t second = 0xFFFFFFFFu;
+        int d2;
+        for (d2 = 0; d2 < nd; d2++) {
+            if (d2 >= best - 1 && d2 <= best + 1) continue;
+            if (cost[d2] < second) second = cost[d2];
+        }
+        if (second != 0xFFFFFFFFu && (uint64_t)lo * 10u > (uint64_t)second * 6u)
+            return -1;
+    }
+
     {
         int32_t off_q4 = 0;
         if (best > 0 && best < nd - 1) {

@@ -22,7 +22,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$bin  = "D:\PDS_2022.2-SP6.4\bin"
+# Prefer the 2025 install when it is present: the 2022 tree is not always kept
+# around, and cdt_js/cdt_cfg come with whichever PDS is installed.
+$bin = "D:\Pango\PDS_2025.2-SP3-EN-ads\bin"
+if (-not (Test-Path (Join-Path $bin "cdt_js.exe"))) {
+    $bin = "D:\PDS_2022.2-SP6.4\bin"
+}
+if (-not (Test-Path (Join-Path $bin "cdt_js.exe"))) {
+    throw "no PDS bin directory with cdt_js.exe found"
+}
 
 function Port-Free([int]$p) {
     try {
