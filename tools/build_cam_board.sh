@@ -32,7 +32,7 @@ rm -f build/fw/cam_*.o
 for f in firmware/common/start.S firmware/common/runtime.c \
          firmware/yolo/mt.c firmware/yolo/mt_net.c \
          firmware/yolo/mt_detect.c firmware/yolo/mt_cam.c \
-         firmware/yolo/main_cam.c; do
+         firmware/yolo/stereo.c firmware/yolo/main_cam.c; do
     $CC $CFLAGS -c "$f" -o "build/fw/cam_$(basename "$f").o"
 done
 

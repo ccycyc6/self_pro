@@ -64,6 +64,35 @@ static void render(float z, float *out_dtrue, int *out_top, int *out_bot)
     *out_bot = bot;
 }
 
+/* ROI path: copy 64x64 (left) and 88x64 (right) out of the synthetic pair,
+ * exactly as the firmware does through the MMIO windows, and check that the
+ * result matches the full-frame path. */
+static uint8_t LROI[64 * 64], RROI[88 * 64];
+
+static int test_roi(void)
+{
+    float dtrue;
+    int top, bot, n, x, y;
+    int32_t dq4;
+    int bad = 0;
+
+    render(2.0f, &dtrue, &top, &bot);
+    for (y = 0; y < 64; y++)
+        for (x = 0; x < 64; x++)
+            LROI[y * 64 + x] = L[(60 + y) * ST_W + (100 + x)];
+    for (y = 0; y < 64; y++)
+        for (x = 0; x < 88; x++)
+            RROI[y * 88 + x] = R[(60 + y) * ST_W + (100 - ST_DMAX + x)];
+
+    dq4 = st_match_roi(LROI, 64, RROI, 88, 0, 0, 64, 64, &n);
+    printf("ROI: true %.2f got %.2f (blocks %d)\n", dtrue, dq4 / 4.0f, n);
+    if (dq4 < (int32_t)(dtrue * 4) - 4 || dq4 > (int32_t)(dtrue * 4) + 4) {
+        printf("ROI FAIL: disparity out of range\n");
+        bad = 1;
+    }
+    return bad;
+}
+
 int main(void)
 {
     float z;
@@ -86,5 +115,7 @@ int main(void)
                z, dtrue, dq4 / 4.0f, zmm, (zmm / 10.0f) - z * 100.0f,
                hmm / 10.0f, n);
     }
+    if (test_roi()) return 1;
+    printf("STEREO TEST PASSED\n");
     return 0;
 }

@@ -20,6 +20,7 @@
 #include "mt_net.h"
 #include "mt_detect.h"
 #include "mt_detect_weights.h"
+#include "stereo.h"
 
 #define CAM_PIX_BASE 0xD0002000u
 #define CAM_FRAME    0xD0003000u
@@ -328,80 +329,85 @@ static void run_detector(net_layer_t *L, uint32_t frame, uint32_t *cmds)
     }
 }
 
-int yolo_camera_run(void)
+/* ---------------------------------------------------------------- G5: range
+ * Reads a 64x64 region from each eye through the MMIO windows and reports the
+ * distance to whatever is in it.
+ *
+ * The windows hand out one pixel per read and take two reads each (address
+ * phase, then data), so a 64x64 left plus 88x64 right region costs about
+ * 19k bus accesses -- roughly 7 ms, which is why the region is small.
+ */
+#define ST_L_BASE   0xD0007000u
+#define ST_R_BASE   0xD0008000u
+#define ROI_X0      96
+#define ROI_Y0      60
+#define ROI_W       64
+#define ROI_H       64
+
+static uint8_t roi_l[ROI_W * ROI_H];
+static uint8_t roi_r[(ROI_W + ST_DMAX) * ROI_H];
+
+static void read_roi(uint32_t base, int x0, int y0, int w, int h, uint8_t *dst)
 {
-    net_layer_t L[4];
-    static uint8_t img[4096];
-    uint32_t frame, cmds = 0, n = 0;
+    int x, y;
 
-    det_make_layers(L);
-
-    det_copy_to_scratch(NET_WT + DET_WT_OFF_L1, det_wt1, sizeof(det_wt1));
-    det_copy_to_scratch(NET_WT + DET_WT_OFF_L2, det_wt2, sizeof(det_wt2));
-    det_copy_to_scratch(NET_WT + DET_WT_OFF_L3, det_wt3, sizeof(det_wt3));
-    det_copy_to_scratch(NET_WT + DET_WT_OFF_L4, det_wt4, sizeof(det_wt4));
-    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L1, det_bias1, sizeof(det_bias1));
-    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L2, det_bias2, sizeof(det_bias2));
-    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L3, det_bias3, sizeof(det_bias3));
-    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L4, det_bias4, sizeof(det_bias4));
-    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L1, det_cfg1, sizeof(det_cfg1));
-    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L2, det_cfg2, sizeof(det_cfg2));
-    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L3, det_cfg3, sizeof(det_cfg3));
-    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L4, det_cfg4, sizeof(det_cfg4));
-
-    printf("tracking the brightest 80x80 block, accelerator every %d frames\n",
-           DET_EVERY);
-    ares_mmio_write(ARES_LED_ADDR, 1u);
-
-#ifdef CAM_DUMP
-    /* Side-by-side 16x16 view: left = cmos1, right = cmos2.  Both frame
-     * counters must advance and both pictures must show the same scene,
-     * offset horizontally by the stereo baseline. */
-    {
-        static uint8_t img2[4096];
-        int x, y;
-
-        for (;;) {
-            frame = cam_grab(img);
-            (void)cam2_grab(img2);
-            printf("f1=%u f2=%u | c1=%08x c2=%08x c2_4=%08x\n",
-                   (unsigned)ARES_MMIO32(0xD0003000u),
-                   (unsigned)ARES_MMIO32(0xD000A000u),
-                   (unsigned)ARES_MMIO32(0xD0002000u),
-                   (unsigned)ARES_MMIO32(0xD0006000u),
-                   (unsigned)ARES_MMIO32(0xD0006010u));
-            for (y = 0; y < 16; y++) {
-                char line[34];
-                for (x = 0; x < 16; x++) {
-                    uint32_t a = img[(((uint32_t)y * 2u) * 32u + (uint32_t)x * 2u) * 4u];
-                    uint32_t b = img2[(((uint32_t)y * 2u) * 32u + (uint32_t)x * 2u) * 4u];
-                    line[x]      = (a > 50u) ? '#' : (a > 35u ? '+' : (a > 20u ? '.' : ' '));
-                    line[x + 16] = ' ';
-                    line[17 + x] = (b > 50u) ? '#' : (b > 35u ? '+' : (b > 20u ? '.' : ' '));
-                }
-                line[33] = 0;
-                printf("%s\n", line);
-            }
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            uint32_t addr = base + (uint32_t)((y0 + y) * ST_W + (x0 + x)) * 4u;
+            (void)ARES_MMIO32(addr);
+            dst[y * w + x] = (uint8_t)(ARES_MMIO32(addr) & 0xFFu);
         }
     }
-#endif
+}
 
-    /* The trained model drives the box now; the brightness tracker is kept as a
-     * reference line on the UART so a colour-selective detection can be told
-     * apart from "the brightest thing in view". */
+/* "2.34" in the OSD text row: metres with two decimals. */
+static void publish_range(uint32_t mm)
+{
+    uint32_t cm = mm / 10u;
+    uint32_t v[8];
+    int i;
+
+    v[0] = (cm / 100u) % 10u;
+    v[1] = 13u;                       /* '.' */
+    v[2] = (cm / 10u) % 10u;
+    v[3] = cm % 10u;
+    for (i = 4; i < 8; i++) v[i] = GLYPH_SPACE;
+
+    for (i = 0; i < 8; i++)
+        ares_mmio_write(OSD_TEXT_BASE + (uint32_t)i * 4u, v[i]);
+}
+
+int yolo_camera_run(void)
+{
+    uint32_t frames = 0, t0 = 0;
+
+    printf("stereo range: 64x64 ROI at (%d,%d), f=%d px, baseline %d mm\n",
+           ROI_X0, ROI_Y0, ST_F_PX, ST_BASELINE_MM);
+    ares_mmio_write(ARES_LED_ADDR, 1u);
+    t0 = mt_rd_mcycle();
+
     for (;;) {
-        int bx, by;
-        uint32_t bavg, mean, rr, gg, bb;
+        int n = 0;
+        int32_t d_q4;
+        uint32_t z_mm = 0;
 
-        frame = cam_grab(img);
-        track_bright(img, &bx, &by, &bavg, &mean, &rr, &gg, &bb);
-        det_copy_to_scratch(NET_IMAGE, img, 4096u);
+        read_roi(ST_L_BASE, ROI_X0, ROI_Y0, ROI_W, ROI_H, roi_l);
+        read_roi(ST_R_BASE, ROI_X0 - ST_DMAX, ROI_Y0,
+                 ROI_W + ST_DMAX, ROI_H, roi_r);
 
-        run_detector(L, frame, &cmds);
+        d_q4 = st_match_roi(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
+                            0, 0, ROI_W, ROI_H, &n);
+        if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
 
-        printf("f=%u bright=(%d,%d) luma=%u/%u rgb=%u,%u,%u\n",
-               (unsigned)frame, bx, by, (unsigned)bavg, (unsigned)mean,
-               (unsigned)rr, (unsigned)gg, (unsigned)bb);
+        publish_range(z_mm);
+
+        frames++;
+        if ((frames & 3u) == 0u) {
+            uint32_t el = mt_rd_mcycle() - t0;
+            printf("d_q4=%d blocks=%d z_mm=%u  (%u frames, %u cyc/frame)\n",
+                   (int)d_q4, n, (unsigned)z_mm, (unsigned)frames,
+                   (unsigned)(el / frames));
+        }
     }
     return 0;
 }

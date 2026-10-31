@@ -32,4 +32,12 @@ int32_t st_match_block(const uint8_t *left, const uint8_t *right,
 int32_t st_match_box(const uint8_t *left, const uint8_t *right,
                      int x0, int y0, int x1, int y1, int *count);
 
+/* Same, but on a region of interest copied out of the 320x240 frame: the left
+ * window starts at the ROI origin, and the right window starts ST_DMAX pixels
+ * earlier so every (x - d) is inside it.  This is what the firmware uses -- it
+ * cannot afford to read the whole frame through the MMIO window. */
+int32_t st_match_roi(const uint8_t *left, int lw,
+                     const uint8_t *right, int rw,
+                     int x0, int y0, int x1, int y1, int *count);
+
 #endif

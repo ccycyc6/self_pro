@@ -138,3 +138,85 @@ int32_t st_match_box(const uint8_t *left, const uint8_t *right,
     }
     return vals[n / 2];
 }
+
+/* ---------------------------------------------------------------- ROI path
+ * The right window starts ST_DMAX pixels left of the left window, so pixel
+ * (x - d) lives at r[(x - d) + ST_DMAX].
+ */
+static uint32_t sad_roi(const uint8_t *l, int lw, const uint8_t *r, int rw,
+                        int x, int y, int d)
+{
+    uint32_t s = 0;
+    int i, j;
+
+    for (j = 0; j < ST_BLOCK; j++) {
+        const uint8_t *lp = l + (uint32_t)(y + j) * (uint32_t)lw + (uint32_t)x;
+        const uint8_t *rp = r + (uint32_t)(y + j) * (uint32_t)rw
+                              + (uint32_t)(x + ST_DMAX - d);
+        for (i = 0; i < ST_BLOCK; i++) {
+            int v = (int)lp[i] - (int)rp[i];
+            s += (uint32_t)(v < 0 ? -v : v);
+        }
+    }
+    return s;
+}
+
+static int32_t match_roi_block(const uint8_t *l, int lw,
+                               const uint8_t *r, int rw, int x, int y)
+{
+    uint32_t cost[ST_DMAX + 1];
+    uint32_t lo = 255u * ST_BLOCK * ST_BLOCK, hi = 0;
+    int d, best = 0, nd = 0;
+
+    for (d = 0; d <= ST_DMAX; d++) {
+        cost[d] = sad_roi(l, lw, r, rw, x, y, d);
+        if (cost[d] < cost[best]) best = d;
+        if (cost[d] < lo) lo = cost[d];
+        if (cost[d] > hi) hi = cost[d];
+        nd = d + 1;
+    }
+    if (nd < 3) return -1;
+    if (hi - lo < 6u * ST_BLOCK * ST_BLOCK) return -1;
+    if (lo > 40u * ST_BLOCK * ST_BLOCK) return -1;
+
+    {
+        int32_t off_q4 = 0;
+        if (best > 0 && best < nd - 1) {
+            int32_t s0 = (int32_t)cost[best - 1];
+            int32_t s1 = (int32_t)cost[best];
+            int32_t s2 = (int32_t)cost[best + 1];
+            int32_t den = 2 * (s0 - 2 * s1 + s2);
+            if (den != 0) {
+                int32_t off = ((s0 - s2) * 4) / den;
+                if (off > 2) off = 2;
+                if (off < -2) off = -2;
+                off_q4 = off;
+            }
+        }
+        return best * 4 + off_q4;
+    }
+}
+
+int32_t st_match_roi(const uint8_t *left, int lw,
+                     const uint8_t *right, int rw,
+                     int x0, int y0, int x1, int y1, int *count)
+{
+    int32_t vals[64];
+    int n = 0, x, y, i, j;
+
+    for (y = y0; y + ST_BLOCK <= y1 && n < 64; y += ST_BLOCK) {
+        for (x = x0; x + ST_BLOCK <= x1 && n < 64; x += ST_BLOCK) {
+            int32_t d = match_roi_block(left, lw, right, rw, x, y);
+            if (d >= 0) vals[n++] = d;
+        }
+    }
+    if (count) *count = n;
+    if (n == 0) return -1;
+
+    for (i = 1; i < n; i++) {
+        int32_t v = vals[i];
+        for (j = i - 1; j >= 0 && vals[j] > v; j--) vals[j + 1] = vals[j];
+        vals[j + 1] = v;
+    }
+    return vals[n / 2];
+}
