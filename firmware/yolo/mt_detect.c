@@ -69,6 +69,16 @@ static void det_cfg_from(const unsigned char *cfg, net_layer_t *L)
     L->nmt   = cfg[4];   /* weight tile size chosen by the packer */
 }
 
+#ifdef RPS_WEIGHTS
+/* Stage one of the packed test images as the network's input.  The image bytes
+ * are already quantised, which is what makes a byte-for-byte comparison with the
+ * offline reference possible. */
+void rps_stage_gold_image(int idx)
+{
+    det_copy_to_scratch(NET_IMAGE, rps_imgs + (uint32_t)idx * 4096u, 4096u);
+}
+#endif
+
 void det_make_layers(net_layer_t *L)
 {
     L[0] = (net_layer_t){32u, 32u, 4u, 8u, 3u, 1u, 1u, 0, 0u, 0,

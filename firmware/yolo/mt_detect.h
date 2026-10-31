@@ -9,4 +9,8 @@
 void det_copy_to_scratch(uint32_t off, const unsigned char *src, uint32_t n);
 void det_make_layers(net_layer_t *L);
 
+#ifdef RPS_WEIGHTS
+void rps_stage_gold_image(int idx);
+#endif
+
 #endif

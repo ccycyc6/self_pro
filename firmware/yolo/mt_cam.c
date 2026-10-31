@@ -494,6 +494,10 @@ static void send_patch(uint8_t id)
  * with).
  */
 static int rps_ready;
+static int g_dump_l1;
+static int g_dump_l3;
+static int g_dump_head;
+static int g_use_gold;
 static net_layer_t rps_L[4];
 
 static void rps_init(void)
@@ -514,6 +518,17 @@ static void rps_init(void)
     rps_ready = 1;
 }
 
+static void dump_mem(const char *tag, uint32_t off, int n)
+{
+    int k;
+
+    printf("%s:\n", tag);
+    for (k = 0; k < n; k++) {
+        printf("%02x", rd8(off + (uint32_t)k));
+        if ((k & 31) == 31) printf("\n");
+    }
+}
+
 static int rps_classify(const uint8_t *p32, int32_t *scores)
 {
     static uint8_t img[32 * 32 * 4];
@@ -522,22 +537,31 @@ static int rps_classify(const uint8_t *p32, int32_t *scores)
 
     if (!rps_ready) rps_init();
 
-    /* The accelerator's operands are signed bytes, so the 0..255 patch has to
-     * be quantised with the same input scale the calibration used.  Feeding raw
-     * bytes wrapped negatives above 127 and the network saw garbage. */
-    for (i = 0; i < 32 * 32; i++) {
-        uint32_t q = ((uint32_t)p32[i] * (uint32_t)RPS_IN_MULT) >> 8;
+    if (g_use_gold) {
+        /* Replay a packed test image: its bytes are already quantised, so the
+         * result can be compared with the offline reference without needing a
+         * hand in front of the camera. */
+        g_use_gold = 0;
+        rps_stage_gold_image(0);
+    } else {
+        /* The engine's operands are signed bytes: quantise the 0..255 patch with
+         * the scale the calibration used, and clamp at 127 (raw bytes above 127
+         * used to wrap negative and the network saw garbage). */
+        for (i = 0; i < 32 * 32; i++) {
+            uint32_t q = ((uint32_t)p32[i] * (uint32_t)RPS_IN_MULT) >> 8;
 
-        if (q > 127u) q = 127u;
-        img[i * 4 + 0] = (uint8_t)q;
-        img[i * 4 + 1] = (uint8_t)q;
-        img[i * 4 + 2] = (uint8_t)q;
-        img[i * 4 + 3] = 0;
+            if (q > 127u) q = 127u;
+            img[i * 4 + 0] = (uint8_t)q;
+            img[i * 4 + 1] = (uint8_t)q;
+            img[i * 4 + 2] = (uint8_t)q;
+            img[i * 4 + 3] = 0;
+        }
+        det_copy_to_scratch(NET_IMAGE, img, sizeof(img));
     }
-    det_copy_to_scratch(NET_IMAGE, img, sizeof(img));
 
     net_pad(&rps_L[0]);
     if (net_conv(&rps_L[0], &cmds) != 0) return -1;
+    if (g_dump_l1) { g_dump_l1 = 0; dump_mem("l1dump", OUT_BUF, 2048); }
     net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 2u, 32u, 32u, 0u, 0u);
 
     net_pad(&rps_L[1]);
@@ -546,9 +570,11 @@ static int rps_classify(const uint8_t *p32, int32_t *scores)
 
     net_pad(&rps_L[2]);
     if (net_conv(&rps_L[2], &cmds) != 0) return -1;
+    if (g_dump_l3) { g_dump_l3 = 0; dump_mem("l3dump", OUT_BUF, 1024); }
 
     net_pad(&rps_L[3]);
     if (net_conv(&rps_L[3], &cmds) != 0) return -1;
+    if (g_dump_head) { g_dump_head = 0; dump_mem("headdump", MID_BUF, 512); }
 
     for (c = 0; c < 3; c++) {
         int g = c / 4, lane = c % 4;
@@ -572,6 +598,7 @@ int yolo_camera_run(void)
     int first = 1;
     int recording = 0;
     uint32_t sent = 0;
+    int dump_head = 0;
 
     printf("motion tracker: 32x32 grid, threshold %d\n", 12);
     ares_mmio_write(ARES_LED_ADDR, 1u);
@@ -583,12 +610,26 @@ int yolo_camera_run(void)
         ch = uart_poll();
         if (ch == 't') trk_set_threshold(8);
         else if (ch == 'T') trk_set_threshold(20);
+        else if (ch == 'l' || ch == 'L') { g_dump_l1 = 1; g_dump_l3 = 1; g_dump_head = 1; }
+        else if (ch == 'v' || ch == 'V') { g_use_gold = 1; g_dump_l1 = 1; g_dump_l3 = 1; g_dump_head = 1; }
         else if (ch == 'r' || ch == 'R') {
             recording = !recording;
             if (recording) sent = 0;
             printf(recording ? "recording started\n" : "recording stopped\n");
         }
 
+#ifdef RPS_WEIGHTS
+        /* 'v' replays a packed test image straight away, without needing a
+         * track: that isolates the accelerator from everything else. */
+        if (g_use_gold) {
+            int32_t dummy[3];
+            static const uint8_t zero_patch[32 * 32];
+            int rc2 = rps_classify(zero_patch, dummy);
+
+            printf("gold replay rc=%d scores=%d,%d,%d\n", rc2,
+                   (int)dummy[0], (int)dummy[1], (int)dummy[2]);
+        }
+#endif
         trk_grab(cur32);
         if (first) {
             for (i = 0; i < TRK_GRID * TRK_GRID; i++) prev32[i] = cur32[i];
@@ -622,6 +663,26 @@ int yolo_camera_run(void)
                 int r;
 
                 c = rps_classify(cls_patch, sc);
+
+                if (dump_head) {
+                    int k2;
+                    dump_head = 0;
+                    printf("patchdump:\n");
+                    for (k2 = 0; k2 < 32 * 32; k2++) {
+                        printf("%02x", cls_patch[k2]);
+                        if ((k2 & 31) == 31) printf("\n");
+                    }
+                    printf("l3dump:\n");
+                    for (k2 = 0; k2 < 1024; k2++) {
+                        printf("%02x", rd8(OUT_BUF + (uint32_t)k2));
+                        if ((k2 & 31) == 31) printf("\n");
+                    }
+                    printf("headdump:\n");
+                    for (k2 = 0; k2 < 512; k2++) {
+                        printf("%02x", rd8(MID_BUF + (uint32_t)k2));
+                        if ((k2 & 31) == 31) printf("\n");
+                    }
+                }
                 {
                     uint32_t pmin = 255, pmax = 0, psum = 0;
                     int k;
