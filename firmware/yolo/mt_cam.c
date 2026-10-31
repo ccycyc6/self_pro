@@ -677,9 +677,14 @@ int yolo_camera_run(void)
                             else if (sc[k] > second) second = sc[k];
                         }
                         margin = sc[best] - second;
-                        if (margin >= 8) {
+                        /* 4, not 8: the scissors channel only ever reaches
+                         * about +4 while rock and paper swing by +-30, so a
+                         * higher gate rejects scissors and accepts nothing
+                         * else.  Stability comes from needing two agreeing
+                         * frames, not from a large margin. */
+                        if (margin >= 4) {
                             if (best == shown) cand_n = 0;
-                            else if (best == cand) { if (++cand_n >= 2) { shown = best; cand_n = 0; } }
+                            else if (best == cand) { if (++cand_n >= 3) { shown = best; cand_n = 0; } }
                             else { cand = best; cand_n = 1; }
                         }
                     }
@@ -692,7 +697,7 @@ int yolo_camera_run(void)
                         printf("hand: none   (window %d..%d, no contrast)\n", lo, hi);
                     else
                         printf("hand: %-8s scores %4d %4d %4d  margin %2d  shown %s\n",
-                               margin >= 8 ? names[c] : "(weak)",
+                               margin >= 4 ? names[c] : "(weak)",
                                (int)sc[0], (int)sc[1], (int)sc[2], margin,
                                shown >= 0 ? names[shown] : "-");
                 }
@@ -711,33 +716,8 @@ int yolo_camera_run(void)
                         if (!edge) { send_patch((uint8_t)i); sent++; }
                     }
                 }
-        } else if ((frames & 0x03u) == 0u) {
-            printf("tracks=%d", n);
-            for (i = 0; i < n; i++)
-                printf(" [%d] %d,%d %dx%d held=%d", i, list[i].cx, list[i].cy,
-                       list[i].w, list[i].h, list[i].held);
-            printf("  %u cyc/frame\n", (unsigned)((mt_rd_mcycle() - t0) / (frames + 1u)));
         }
 
-        /* Every eighth frame, show the normalised patch of the first track: if
-         * the box is right, the hand fills the patch whatever the distance. */
-        if (!recording && (frames & 0x07u) == 0u && n > 0) {
-            static uint8_t patch[32 * 32];
-            int ax, ay;
-
-            if (trk_patch(&list[0], patch, 0)) {
-                printf("patch of track 0:\n");
-                for (ay = 0; ay < 16; ay++) {
-                    char row[18];
-                    for (ax = 0; ax < 16; ax++) {
-                        uint32_t v = patch[(ay * 2) * 32 + ax * 2];
-                        row[ax] = (v > 140) ? '#' : (v > 90 ? '+' : (v > 45 ? '.' : ' '));
-                    }
-                    row[16] = 0;
-                    printf("|%s|\n", row);
-                }
-            }
-        }
 
         for (i = 0; i < TRK_GRID * TRK_GRID; i++) prev32[i] = cur32[i];
         frames++;

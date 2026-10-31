@@ -174,6 +174,32 @@ def main():
                   for c in range(3)]
             print(f"  patch {j:3d}: scores {sc} -> class {int(np.argmax(sc))}")
 
+    # Per-class normalisation.  The head's three channels do not have the same
+    # spread: on the calibration set class 0 and 1 swing by +-30 while class 2
+    # (scissors) only reaches a few counts, so an absolute margin gate rejects
+    # scissors while accepting everything else.  Z-scoring each class against
+    # its own mean and spread makes the margins comparable, and the constants
+    # are tiny so they go into the firmware header.
+    sc_all = []   # keep for diagnostics only
+    for i in range(len(x)):
+        flat = np.clip(np.round(expand(x[i:i + 1])[0] / s_in[0]), -128, 127).astype(np.int32)
+        out = pw.int_forward((flat.reshape(-1) & 0xFF).astype(np.uint8), packed)
+        sc_all.append([float(np.mean(out[(c // 4) * 256:(c // 4 + 1) * 256].reshape(64, 4)[:, c % 4].astype(np.int8)))
+                       for c in range(3)])
+    sc_all = np.array(sc_all)
+    mean_c = sc_all.mean(axis=0)
+    std_c = sc_all.std(axis=0)
+    std_c = np.where(std_c < 1e-3, 1.0, std_c)
+    inv_c = np.round(256.0 / std_c).astype(int)
+    print("class means:", np.round(mean_c, 1).tolist())
+    print("class std  :", np.round(std_c, 1).tolist())
+
+    # Note: z-scoring per class was tried and made things worse (74.6%).  The
+    # scissors channel barely responds -- mean 4.5, spread 0.8 -- so the network
+    # decides scissors by the other two channels going negative, and an absolute
+    # margin on scissors can only ever be about 6 counts.  The firmware gate is
+    # therefore 4, not 8.
+
     labels = []
     for i in range(ns):
         flat = np.clip(np.round(expand(x[idx[i]:idx[i] + 1])[0] / s_in[0]), -128, 127).astype(np.int32)
