@@ -29,7 +29,11 @@ typedef struct {
 /* Resample a track's box (with margin) into a 32x32 luma patch.  Because the
  * source region is the box itself, a hand at any distance fills the patch the
  * same way, which is what a classifier needs.  Returns 0 if the box is empty. */
-int trk_patch(const trk_t *t, uint8_t *out32);
+/* Letterboxed: the box is fitted into a square canvas by its longer side and
+ * centred, so a hand pointing up and the same hand pointing sideways keep their
+ * shape instead of being stretched into a square.  edge is set when the source
+ * square runs off the picture (the hand is entering from a side). */
+int trk_patch(const trk_t *t, uint8_t *out32, int *edge);
 
 /* Refit a track's box to the whole object instead of just its moving edge.
  * Motion only shows where the hand moved, so the box ends up smaller than the

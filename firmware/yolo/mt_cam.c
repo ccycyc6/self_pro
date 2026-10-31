@@ -529,9 +529,14 @@ int yolo_camera_run(void)
 
         if (recording) {
             for (i = 0; i < n; i++)
-                if (trk_patch(&list[i], rec_patch)) {
-                    send_patch((uint8_t)i);
-                    sent++;
+                {
+                    int edge = 0;
+
+                    if (trk_patch(&list[i], rec_patch, &edge)) {
+                        /* a hand entering from a side gives a truncated patch;
+                         * sending it would teach the classifier the wrong shape */
+                        if (!edge) { send_patch((uint8_t)i); sent++; }
+                    }
                 }
         } else if ((frames & 0x03u) == 0u) {
             printf("tracks=%d", n);
@@ -547,7 +552,7 @@ int yolo_camera_run(void)
             static uint8_t patch[32 * 32];
             int ax, ay;
 
-            if (trk_patch(&list[0], patch)) {
+            if (trk_patch(&list[0], patch, 0)) {
                 printf("patch of track 0:\n");
                 for (ay = 0; ay < 16; ay++) {
                     char row[18];
