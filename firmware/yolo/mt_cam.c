@@ -406,92 +406,93 @@ static void sample_grid(uint8_t *dst)
                 (uint32_t)((y * 8) * ST_W + (x * 8)) * 4u) & 0xFFu);
 }
 
-/* Background capture is no longer needed: the object is found by its texture,
- * not by differing from a learned empty scene.  Kept as a no-op so the boot
- * sequence stays the same. */
 static void bg_capture(void)
 {
+    int k, i;
+
+    for (i = 0; i < BG_W * BG_H; i++) bg[i] = 0;
+
+    for (k = 0; k < 8; k++) {
+        sample_grid(cur);
+        for (i = 0; i < BG_W * BG_H; i++)
+            bg[i] = (uint8_t)((bg[i] + cur[i]) / 2);   /* running mean */
+    }
+}
+
+/* One character from the serial port, or -1.  'c' re-captures the background. */
+static int uart_poll(void)
+{
+    if (ARES_MMIO32(UART_STATUS) & 2u) return (int)(ARES_MMIO32(UART_BASE) & 0xFFu);
+    return -1;
 }
 
 /* Tallest vertical run of "subject" cells; returns its pixel height (each cell
  * is 8 pixels of the 240 line image). */
-/* Object = the region that has texture.  A white wall has none, so gradient
- * energy separates the object without any background model: nothing to
- * calibrate, nothing to drift when the light changes.
+/* Object = what differs from the background.  The camera is fixed and the wall
+ * is static, so this gives a solid box (not just an outline) and costs one
+ * subtraction per cell.  The background is captured at boot, or on demand by
+ * sending 'c' over the serial port -- remove the object, send 'c', put it back.
  *
- * Returns the largest connected component's bounding box in 320x240 pixels. */
+ * Per-cell differences are taken relative to the frame mean, because
+ * auto-exposure shifts the whole picture.
+ */
 static int find_object(int *ox0, int *oy0, int *ox1, int *oy1)
 {
     static uint8_t seen[BG_W * BG_H];
     static int16_t stack[BG_W * BG_H];
-    uint8_t energy[BG_W * BG_H];
-    uint32_t esum = 0;
+    uint8_t diff[BG_W * BG_H];
+    uint32_t dsum = 0;
     int mean, i, best_area = 0;
     int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
 
-    /* |dx| + |dy| of the 40x30 sample grid */
     for (i = 0; i < BG_W * BG_H; i++) {
-        int x = i % BG_W, y = i / BG_W;
-        int gx = 0, gy = 0;
-
-        if (x + 1 < BG_W) {
-            gx = (int)cur[i + 1] - (int)cur[i];
-            if (gx < 0) gx = -gx;
-        }
-        if (y + 1 < BG_H) {
-            gy = (int)cur[i + BG_W] - (int)cur[i];
-            if (gy < 0) gy = -gy;
-        }
-        energy[i] = (uint8_t)(gx + gy > 255 ? 255 : gx + gy);
-        esum += energy[i];
+        int d = (int)cur[i] - (int)bg[i];
+        if (d < 0) d = -d;
+        if (d > 255) d = 255;
+        diff[i] = (uint8_t)d;
+        dsum += (uint32_t)d;
         seen[i] = 0;
     }
-    mean = (int)(esum / (BG_W * BG_H));
+    mean = (int)(dsum / (BG_W * BG_H));
 
-    /* a cell belongs to the object when its texture is well above the frame's */
-    {
-        int thr = mean + 10;
-        if (thr < 12) thr = 12;
+    for (i = 0; i < BG_W * BG_H; i++) {
+        int sp = 0, area = 0;
+        int x0 = BG_W, y0 = BG_H, x1 = 0, y1 = 0;
 
-        for (i = 0; i < BG_W * BG_H; i++) {
-            int sp = 0, area = 0;
-            int x0 = BG_W, y0 = BG_H, x1 = 0, y1 = 0;
+        if (seen[i] || (int)diff[i] - mean <= BG_T) continue;
 
-            if (seen[i] || energy[i] <= thr) continue;
+        stack[sp++] = (int16_t)i;
+        seen[i] = 1;
+        while (sp > 0) {
+            int c = stack[--sp];
+            int cx = c % BG_W, cy = c / BG_W;
+            int dy, dx;
 
-            stack[sp++] = (int16_t)i;
-            seen[i] = 1;
-            while (sp > 0) {
-                int c = stack[--sp];
-                int cx = c % BG_W, cy = c / BG_W;
-                int dy, dx;
+            area++;
+            if (cx < x0) x0 = cx;
+            if (cx > x1) x1 = cx;
+            if (cy < y0) y0 = cy;
+            if (cy > y1) y1 = cy;
 
-                area++;
-                if (cx < x0) x0 = cx;
-                if (cx > x1) x1 = cx;
-                if (cy < y0) y0 = cy;
-                if (cy > y1) y1 = cy;
-
-                for (dy = -1; dy <= 1; dy++)
-                    for (dx = -1; dx <= 1; dx++) {
-                        int nx = cx + dx, ny = cy + dy, ni;
-                        if (nx < 0 || ny < 0 || nx >= BG_W || ny >= BG_H) continue;
-                        ni = ny * BG_W + nx;
-                        if (!seen[ni] && energy[ni] > thr) {
-                            seen[ni] = 1;
-                            stack[sp++] = (int16_t)ni;
-                        }
+            for (dy = -1; dy <= 1; dy++)
+                for (dx = -1; dx <= 1; dx++) {
+                    int nx = cx + dx, ny = cy + dy, ni;
+                    if (nx < 0 || ny < 0 || nx >= BG_W || ny >= BG_H) continue;
+                    ni = ny * BG_W + nx;
+                    if (!seen[ni] && (int)diff[ni] - mean > BG_T) {
+                        seen[ni] = 1;
+                        stack[sp++] = (int16_t)ni;
                     }
-            }
+                }
+        }
 
-            if (area > best_area) {
-                best_area = area;
-                bx0 = x0; by0 = y0; bx1 = x1; by1 = y1;
-            }
+        if (area > best_area) {
+            best_area = area;
+            bx0 = x0; by0 = y0; bx1 = x1; by1 = y1;
         }
     }
 
-    if (best_area < 4) return 0;
+    if (best_area < 6) return 0;
 
     *ox0 = bx0 * 8;
     *oy0 = by0 * 8;
@@ -537,72 +538,114 @@ static void find_texture(int *ox, int *oy)
     if (*oy > ST_H - ROI_H) *oy = ST_H - ROI_H;
 }
 
+/* Vertical extent of what sits at the measured disparity.  For each row of the
+ * 320x240 image, compare a few samples of the left eye with the right eye at the
+ * disparity that won, and keep the longest run of rows that agree.  This ties the
+ * height to the same measurement as the distance, so no background model is
+ * involved.
+ */
+static int extent_at_depth(int32_t d_q4, int x0, int w, int *oy0, int *oy1)
+{
+    int d = (int)((d_q4 + 2) / 4);
+    int y, k, run = 0, best = 0, besty0 = 0, besty1 = 0, cury0 = 0;
+
+    if (d < 1) return 0;
+
+    for (y = 0; y < ST_H; y++) {
+        int cost = 0, n2 = 0;
+
+        for (k = 0; k < w; k += 4) {
+            int x = x0 + k;
+            uint32_t la = ST_L_BASE + (uint32_t)(y * ST_W + x) * 4u;
+            uint32_t ra = ST_R_BASE + (uint32_t)(y * ST_W + (x - d)) * 4u;
+            int lv = (int)(ARES_MMIO32(la) & 0xFFu);
+            int rv = (int)(ARES_MMIO32(ra) & 0xFFu);
+            cost += (lv > rv) ? (lv - rv) : (rv - lv);
+            n2++;
+        }
+        cost = n2 ? cost / n2 : 99;
+
+        if (cost < 18) {
+            if (run == 0) cury0 = y;
+            run++;
+            if (run > best) { best = run; besty0 = cury0; besty1 = y; }
+        } else {
+            run = 0;
+        }
+    }
+    if (best < 16) return 0;
+    *oy0 = besty0;
+    *oy1 = besty1;
+    return best;
+}
+
 int yolo_camera_run(void)
 {
     uint32_t frames = 0, t0 = 0;
 
-    printf("stereo range: %dx%d adaptive ROI, f=%d px, baseline %d mm\n",
+    printf("object range: %dx%d texture ROI, f=%d px, baseline %d mm\n",
            ROI_W, ROI_H, ST_F_PX, ST_BASELINE_MM);
     ares_mmio_write(ARES_LED_ADDR, 1u);
     t0 = mt_rd_mcycle();
 
-    uint32_t no_object = 0;
-
     for (;;) {
-        int n = 0;
+        int n = 0, ox = ROI_X0, oy = ROI_Y0;
+        int ty0 = 0, ty1 = 0;
         int32_t d_q4;
-        uint32_t z_mm = 0;
+        uint32_t z_mm = 0, h_cm = 0;
+        int ch;
 
-        {
-            uint32_t ta = mt_rd_mcycle();
-            read_roi(ST_L_BASE, ROI_X0, ROI_Y0, ROI_W, ROI_H, roi_l);
-            read_roi(ST_R_BASE, ROI_X0 - ST_DMAX, ROI_Y0,
-                     ROI_W + ST_DMAX, ROI_H, roi_r);
-            if ((frames & 3u) == 0u)
-                printf("roi: %u cyc l0=%u r0=%u | thumb1=%08x thumb2=%08x stl=%08x str=%08x\n",
-                       (unsigned)(mt_rd_mcycle() - ta),
-                       (unsigned)roi_l[0], (unsigned)roi_r[0],
-                       (unsigned)(ARES_MMIO32(0xD0002000u) & 0xFFFFu),
-                       (unsigned)(ARES_MMIO32(0xD0006000u) & 0xFFFFu),
-                       (unsigned)(ARES_MMIO32(0xD0007000u) & 0xFFu),
-                       (unsigned)(ARES_MMIO32(0xD0008000u) & 0xFFu));
+        /* 'c' re-learns the empty scene (kept although the tracker no longer
+         * needs it: it is the cheapest way to check lighting drift). */
+        ch = uart_poll();
+        if (ch == 'c' || ch == 'C') {
+            bg_capture();
+            printf("background captured\n");
         }
 
-        if ((frames & 0x07u) == 0u) {
-            /* how much texture is in the ROI at all, and where the best block
-             * sits: without contrast there is nothing to match. */
-            uint32_t lo = 255, hi = 0, i2, best = 0;
-            int bx = 0, by = 0, x2, y2;
+        /* the stereo window follows the most textured tile */
+        find_texture(&ox, &oy);
+        read_roi(ST_L_BASE, ox, oy, ROI_W, ROI_H, roi_l);
+        read_roi(ST_R_BASE, ox - ST_DMAX, oy,
+                 ROI_W + ST_DMAX, ROI_H, roi_r);
 
-            for (i2 = 0; i2 < (uint32_t)(ROI_W * ROI_H); i2++) {
-                if (roi_l[i2] < lo) lo = roi_l[i2];
-                if (roi_l[i2] > hi) hi = roi_l[i2];
-            }
-            for (y2 = 0; y2 + 8 <= ROI_H; y2 += 24)
-                for (x2 = 0; x2 + 8 <= ROI_W; x2 += 24) {
-                    uint32_t cost[ST_DMAX + 1], l2 = 0, h2 = 0;
-                    int k;
-                    int nb = st_block_curve(roi_l, ROI_W, roi_r,
-                                            ROI_W + ST_DMAX, x2, y2,
-                                            cost, ST_DMAX + 1, &l2, &h2);
-                    for (k = 0; k < nb; k++)
-                        if (cost[k] > best) best = cost[k];
-                    (void)l2;
-                }
-            printf("roi luma %u..%u (contrast %u), best-block peak %u\n",
-                   (unsigned)lo, (unsigned)hi, (unsigned)(hi - lo),
-                   (unsigned)best);
-            {
-                /* whole stereo field of view (the central 640x480 of the 720p
-                 * picture, decimated to 320x240), sampled every 8th pixel */
+        d_q4 = st_match_roi_step(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
+                                 0, 0, ROI_W, ROI_H, 32, &n);
+        if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
+
+        /* and the height is the vertical run that sits at the same depth */
+        if (d_q4 > 0 && extent_at_depth(d_q4, ox, ROI_W, &ty0, &ty1)) {
+            int v_px = ty1 - ty0 + 1;
+            uint32_t h_mm = (uint32_t)(((uint64_t)z_mm * (uint32_t)v_px) / ST_F_PX);
+
+            h_cm = h_mm / 10u;
+
+            ares_mmio_write(OSD_BOX_BASE + 0u,  (uint32_t)(320 + ox * 2));
+            ares_mmio_write(OSD_BOX_BASE + 4u,  (uint32_t)(80 + ty0 * 2));
+            ares_mmio_write(OSD_BOX_BASE + 8u,  (uint32_t)(320 + (ox + ROI_W) * 2));
+            ares_mmio_write(OSD_BOX_BASE + 12u, (uint32_t)(80 + ty1 * 2));
+            ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
+
+            if ((frames & 0x07u) == 0u)
+                printf("object x=%d..%d y=%d..%d v_px=%d d_q4=%d z=%u h=%u\n",
+                       ox, ox + ROI_W - 1, ty0, ty1, v_px, (int)d_q4,
+                       (unsigned)z_mm, (unsigned)h_cm);
+        } else {
+            ares_mmio_write(OSD_BOX_BASE + 0u, 0u);
+            ares_mmio_write(OSD_BOX_BASE + 4u, 0u);
+            ares_mmio_write(OSD_BOX_BASE + 8u, 0u);
+            ares_mmio_write(OSD_BOX_BASE + 12u, 0u);
+            ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
+            if ((frames & 0x07u) == 0u) {
                 int ax, ay;
+                printf("no measurement (d_q4=%d, blocks=%d); field:\n", (int)d_q4, n);
                 for (ay = 0; ay < 24; ay++) {
                     char row[42];
                     for (ax = 0; ax < 40; ax++) {
                         uint32_t addr = ST_L_BASE +
                             (uint32_t)((ay * 10) * ST_W + (ax * 8)) * 4u;
                         uint32_t v = ARES_MMIO32(addr) & 0xFFu;
-                        row[ax] = (v > 120) ? '#' : (v > 70 ? '+' : (v > 35 ? '.' : ' '));
+                        row[ax] = (v > 140) ? '#' : (v > 90 ? '+' : (v > 45 ? '.' : ' '));
                     }
                     row[40] = 0;
                     printf("|%s|\n", row);
@@ -610,91 +653,13 @@ int yolo_camera_run(void)
             }
         }
 
-        sample_grid(cur);
-        {
-            int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
-            int ox = ROI_X0, oy = ROI_Y0;
-            uint32_t h_cm = 0;
-            int have = find_object(&bx0, &by0, &bx1, &by1);
-
-            if (have) no_object = 0;
-
-            if (have) {
-                ox = (bx0 + bx1) / 2 - ROI_W / 2;
-                oy = (by0 + by1) / 2 - ROI_H / 2;
-                if (ox < 0) ox = 0;
-                if (oy < 0) oy = 0;
-                if (ox > ST_W - ROI_W) ox = ST_W - ROI_W;
-                if (oy > ST_H - ROI_H) oy = ST_H - ROI_H;
-            }
-
-            read_roi(ST_L_BASE, ox, oy, ROI_W, ROI_H, roi_l);
-            read_roi(ST_R_BASE, ox - ST_DMAX, oy,
-                     ROI_W + ST_DMAX, ROI_H, roi_r);
-
-            d_q4 = st_match_roi_step(roi_l, ROI_W, roi_r, ROI_W + ST_DMAX,
-                                     0, 0, ROI_W, ROI_H, 32, &n);
-            if (d_q4 > 0) z_mm = st_depth_mm(d_q4);
-
-            if (have) {
-                int v_px = by1 - by0 + 1;
-                int edge = (by0 <= 1) || (by1 >= ST_H - 2);
-
-                if (z_mm && v_px > 12 && !edge) {
-                    uint32_t h_mm = (uint32_t)(((uint64_t)z_mm * (uint32_t)v_px) / ST_F_PX);
-                    h_cm = h_mm / 10u;
-                }
-
-                /* object box on the HDMI picture: the stereo crop sits at
-                 * (320,80) and the picture is twice the 320x240 grid */
-                ares_mmio_write(OSD_BOX_BASE + 0u,  (uint32_t)(320 + bx0 * 2));
-                ares_mmio_write(OSD_BOX_BASE + 4u,  (uint32_t)(80 + by0 * 2));
-                ares_mmio_write(OSD_BOX_BASE + 8u,  (uint32_t)(320 + bx1 * 2));
-                ares_mmio_write(OSD_BOX_BASE + 12u, (uint32_t)(80 + by1 * 2));
-                ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
-
-                if ((frames & 0x0Fu) == 0u) {
-                    int ax, ay;
-                    printf("object (%d,%d)-(%d,%d) v_px=%d d_q4=%d z=%u h=%u%s\n",
-                           bx0, by0, bx1, by1, v_px, (int)d_q4,
-                           (unsigned)z_mm, (unsigned)h_cm, edge ? " edge" : "");
-                    /* what the stereo pair actually sees: 40x24 cells of the
-                     * 320x240 crop, '#' bright, '+' mid, '.' dark, ' ' black */
-                    for (ay = 0; ay < 24; ay++) {
-                        char row[42];
-                        for (ax = 0; ax < 40; ax++) {
-                            uint32_t v = cur[ay * 40 + ax];
-                            row[ax] = (v > 140) ? '#' : (v > 90 ? '+' : (v > 45 ? '.' : ' '));
-                        }
-                        row[40] = 0;
-                        printf("|%s|\n", row);
-                    }
-                }
-            } else {
-                ares_mmio_write(OSD_BOX_BASE + 0u, 0u);
-                ares_mmio_write(OSD_BOX_BASE + 4u, 0u);
-                ares_mmio_write(OSD_BOX_BASE + 8u, 0u);
-                ares_mmio_write(OSD_BOX_BASE + 12u, 0u);
-                ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
-
-                /* Deliberately no automatic re-capture: a static object does
-                 * not move, so re-learning "because nothing is seen" would
-                 * learn the object as background and it would never come back.
-                 * The background is taken once at boot -- start with an empty
-                 * scene. */
-                no_object = 0;
-                if ((frames & 0x07u) == 0u) printf("no object\n");
-            }
-
-            publish_metrics(z_mm, h_cm);
-        }
+        publish_metrics(z_mm, h_cm);
 
         frames++;
         if ((frames & 3u) == 0u) {
             uint32_t el = mt_rd_mcycle() - t0;
-            printf("d_q4=%d blocks=%d z_mm=%u  (%u frames, %u cyc/frame)\n",
-                   (int)d_q4, n, (unsigned)z_mm, (unsigned)frames,
-                   (unsigned)(el / frames));
+            printf("  %u frames, %u cyc/frame\n",
+                   (unsigned)frames, (unsigned)(el / frames));
         }
     }
     return 0;
