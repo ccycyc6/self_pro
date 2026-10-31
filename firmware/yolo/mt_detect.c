@@ -15,7 +15,11 @@
 #include "ares_soc.h"
 #include "mt.h"
 #include "mt_net.h"
+#ifdef RPS_WEIGHTS
+#include "rps_weights.h"      /* three-class gesture head */
+#else
 #include "mt_detect_weights.h"
+#endif
 #include "mt_detect.h"
 
 #define DET_IMG_BYTES   (32u * 32u * 4u)

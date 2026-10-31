@@ -22,6 +22,11 @@
 #include "mt_detect_weights.h"
 #include "stereo.h"
 #include "mt_track.h"
+#ifdef RPS_WEIGHTS
+#include "rps_params.h"
+#include "mt_detect.h"
+#include "mt_net.h"
+#endif
 
 /* One character from the serial port, or -1. */
 static int uart_poll(void)
@@ -479,6 +484,85 @@ static void send_patch(uint8_t id)
     uart_putc((char)(sum & 0xFFu));
 }
 
+#ifdef RPS_WEIGHTS
+/* Run the three-class head on one 32x32 patch.
+ *
+ * The accelerator is configured by the packed cfg rows, exactly like the
+ * detector; only the meaning of the eight head channels changes: three of them
+ * are the class scores and the rest stay unused.  The score of class c is the
+ * mean of its 8x8 map (global average pooling, the form the model was trained
+ * with).
+ */
+static int rps_ready;
+static net_layer_t rps_L[4];
+
+static void rps_init(void)
+{
+    det_make_layers(rps_L);
+    det_copy_to_scratch(NET_WT + DET_WT_OFF_L1, det_wt1, sizeof(det_wt1));
+    det_copy_to_scratch(NET_WT + DET_WT_OFF_L2, det_wt2, sizeof(det_wt2));
+    det_copy_to_scratch(NET_WT + DET_WT_OFF_L3, det_wt3, sizeof(det_wt3));
+    det_copy_to_scratch(NET_WT + DET_WT_OFF_L4, det_wt4, sizeof(det_wt4));
+    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L1, det_bias1, sizeof(det_bias1));
+    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L2, det_bias2, sizeof(det_bias2));
+    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L3, det_bias3, sizeof(det_bias3));
+    det_copy_to_scratch(NET_BIAS + DET_BIAS_OFF_L4, det_bias4, sizeof(det_bias4));
+    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L1, det_cfg1, sizeof(det_cfg1));
+    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L2, det_cfg2, sizeof(det_cfg2));
+    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L3, det_cfg3, sizeof(det_cfg3));
+    det_copy_to_scratch(NET_CFG + DET_CFG_OFF_L4, det_cfg4, sizeof(det_cfg4));
+    rps_ready = 1;
+}
+
+static int rps_classify(const uint8_t *p32, int32_t *scores)
+{
+    static uint8_t img[32 * 32 * 4];
+    uint32_t cmds = 0;
+    int i, c, best = 0;
+
+    if (!rps_ready) rps_init();
+
+    /* The accelerator's operands are signed bytes, so the 0..255 patch has to
+     * be quantised with the same input scale the calibration used.  Feeding raw
+     * bytes wrapped negatives above 127 and the network saw garbage. */
+    for (i = 0; i < 32 * 32; i++) {
+        uint32_t q = ((uint32_t)p32[i] * (uint32_t)RPS_IN_MULT) >> 8;
+
+        if (q > 127u) q = 127u;
+        img[i * 4 + 0] = (uint8_t)q;
+        img[i * 4 + 1] = (uint8_t)q;
+        img[i * 4 + 2] = (uint8_t)q;
+        img[i * 4 + 3] = 0;
+    }
+    det_copy_to_scratch(NET_IMAGE, img, sizeof(img));
+
+    net_pad(&rps_L[0]);
+    if (net_conv(&rps_L[0], &cmds) != 0) return -1;
+    net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 2u, 32u, 32u, 0u, 0u);
+
+    net_pad(&rps_L[1]);
+    if (net_conv(&rps_L[1], &cmds) != 0) return -1;
+    net_pool2(MT_BUF_BASE, OUT_BUF, MID_BUF, 4u, 16u, 16u, 0u, 0u);
+
+    net_pad(&rps_L[2]);
+    if (net_conv(&rps_L[2], &cmds) != 0) return -1;
+
+    net_pad(&rps_L[3]);
+    if (net_conv(&rps_L[3], &cmds) != 0) return -1;
+
+    for (c = 0; c < 3; c++) {
+        int g = c / 4, lane = c % 4;
+        int32_t sum = 0;
+
+        for (i = 0; i < 64; i++)
+            sum += (int8_t)rd8(MID_BUF + (uint32_t)(g * 256 + i * 4 + lane));
+        scores[c] = sum / 64;
+        if (c == 0 || scores[c] > scores[best]) best = c;
+    }
+    return best;
+}
+#endif
+
 int yolo_camera_run(void)
 {
     static uint8_t prev32[TRK_GRID * TRK_GRID];
@@ -526,6 +610,42 @@ int yolo_camera_run(void)
         }
         ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
         publish_count(n);
+
+#ifdef RPS_WEIGHTS
+        if ((frames & 0x03u) == 0u && n > 0) {
+            static uint8_t cls_patch[32 * 32];
+            int32_t sc[3];
+            int edge = 0;
+
+            if (trk_patch(&list[0], cls_patch, &edge)) {
+                int c;
+                int r;
+
+                c = rps_classify(cls_patch, sc);
+                {
+                    uint32_t pmin = 255, pmax = 0, psum = 0;
+                    int k;
+                    for (k = 0; k < 32 * 32; k++) {
+                        uint32_t v = cls_patch[k];
+                        if (v < pmin) pmin = v;
+                        if (v > pmax) pmax = v;
+                        psum += v;
+                    }
+                    printf("classify: d=%d e=%d s=%d,%d,%d patch %u..%u mean %u\n",
+                           c, edge, (int)sc[0], (int)sc[1], (int)sc[2],
+                           (unsigned)pmin, (unsigned)pmax, (unsigned)(psum / 1024u));
+                }
+                if (c >= 0) {
+                    /* digits 1..3 in the text row: 1 rock, 2 paper, 3 scissors */
+                    uint32_t v[8];
+                    v[0] = (uint32_t)(c + 1);
+                    for (r = 1; r < 8; r++) v[r] = GLYPH_SPACE;
+                    for (r = 0; r < 8; r++)
+                        ares_mmio_write(OSD_TEXT_BASE + (uint32_t)r * 4u, v[r]);
+                }
+            }
+        }
+#endif
 
         if (recording) {
             for (i = 0; i < n; i++)
