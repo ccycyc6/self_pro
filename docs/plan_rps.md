@@ -163,3 +163,12 @@ cam1 (720p) ──► stereo_cap（取中心 640x480，2:1 降采样）──►
 
 - 双手/胜负判定：已实现后按要求移除，只保留单手；
 - 距离测量：不可控因素太多，已从主线移除。
+
+## 归档（tag `rps-demo-working`）
+
+| 产物 | 值 |
+|---|---|
+| 位流 | `build/release/s3h_video_fb_top.sbit` |
+| 位流 sha256 | `141344AD702160D0D216C306B5E2FD8B6301998B9998E41A2B8B810AA4B08404` |
+| 固件 | `build/fw/cam_board.bin`（70772 字节，编译时带 `-DRPS_WEIGHTS`） |
+| 复现命令 | `tools/build_pango.ps1`（如需位流）；`EXTRA_DEFS='-DRPS_WEIGHTS' bash tools/build_cam_board.sh`；`tools/program_board.ps1`；`tools/upload.ps1` |
