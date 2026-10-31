@@ -125,6 +125,7 @@ module ares_mmio_bus (
   // takes one cycle: M_CAM is that extra cycle.
   logic [10:0] cam_addr_q;
   logic [10:0] cam2_addr_q;
+  logic        cam2_sel_q;
   logic [19:0] st_l_addr_q, st_r_addr_q;
   assign cam_addr  = cam_addr_q;
   assign cam2_addr = cam2_addr_q;
@@ -180,12 +181,16 @@ module ares_mmio_bus (
           if (req_valid && req_ready) begin
             if (sel_cam && !req_write) begin
               cam_addr_q <= req_addr[11:2];
+              cam2_sel_q <= 1'b0;
               state_q <= M_CAM;
             end else if (sel_cam2 && !req_write) begin
               // every word in the window is a pixel; the frame counter lives in
-              // its own window (0xD000_A000) so it cannot shadow pixel 2
+              // its own window (0xD000_A000) so it cannot shadow pixel 2.
+              // Same two-cycle read as cmos1: the RAM output is registered, so
+              // one state is not enough (it returned every fourth pixel).
               cam2_addr_q <= req_addr[11:2];
-              state_q <= M_CAM2R;
+              cam2_sel_q  <= 1'b1;
+              state_q <= M_CAM;
             end else if (sel_stl && !req_write) begin
               st_l_addr_q <= req_addr[19:2];
               state_q <= M_STL;
@@ -219,7 +224,7 @@ module ares_mmio_bus (
           state_q <= M_CAM2;
         end
         M_CAM2: begin
-          rsp_data_q <= {16'd0, cam_data};
+          rsp_data_q <= cam2_sel_q ? {16'd0, cam2_data} : {16'd0, cam_data};
           state_q <= M_RESP;
         end
         M_CAM2R: begin
