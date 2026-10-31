@@ -26,34 +26,40 @@ static blob_t blobs[TRK_MAX];
 
 int trk_patch(const trk_t *t, uint8_t *out32, int *edge)
 {
-    int bw, bh, side, ox, oy, i, j;
+    int x0, y0, bw, bh, i, j, side, ox, oy;
     uint32_t bg = 0;
-    int nbg = 0, off = 0;
 
     if (t->w <= 0 || t->h <= 0) return 0;
 
-    bw = t->w * 10 + (t->w * 10) / 4;          /* 25% margin, in source pixels */
-    bh = (t->h * 15) / 2 + (t->h * 15) / 8;
+    /* Exactly what the green box covers, plus a small margin, letterboxed to a
+     * square so the aspect ratio is preserved.  No heuristics about where the
+     * arm comes from: the box is what the viewer sees and what was recorded, so
+     * training and inference see the same thing. */
+    x0 = (t->cx - t->w / 2) * 10;
+    y0 = ((t->cy - t->h / 2) * 15) / 2;
+    bw = t->w * 10;
+    bh = (t->h * 15) / 2;
+
+    x0 -= bw / 10;                 /* 10% margin around the box */
+    y0 -= bh / 10;
+
     side = (bw > bh) ? bw : bh;
-    if (side < 12) side = 12;
+    if (side < 16) side = 16;
+    ox = x0 + bw / 2 - side / 2;
+    oy = y0 + bh / 2 - side / 2;
 
-    ox = t->cx * 10 - side / 2;
-    oy = (t->cy * 15) / 2 - side / 2;
-
-    if (edge) {
+    if (edge)
         *edge = (ox < 0) || (oy < 0) || (ox + side > TRK_W) || (oy + side > 240);
-    }
 
-    /* background level just outside the square, used to fill the part that
-     * falls off the picture -- clamping would smear a bright wall into the hand */
-    if (ox < 0) { off = 1; }
     {
         int px = ox + side + 2, py = oy + side / 2;
-        if (px > TRK_W - 1) px = TRK_W - 1;
+        int ok = 1;
+
+        if (px > TRK_W - 1) px = ox - 2;
+        if (px < 0 || px > TRK_W - 1) ok = 0;
         if (py < 0) py = 0;
         if (py > 239) py = 239;
-        bg = ARES_MMIO32(TRK_L_BASE + (uint32_t)(py * TRK_W + px) * 4u) & 0xFFu;
-        nbg = 1;
+        if (ok) bg = ARES_MMIO32(TRK_L_BASE + (uint32_t)(py * TRK_W + px) * 4u) & 0xFFu;
     }
 
     for (j = 0; j < 32; j++) {
@@ -62,16 +68,14 @@ int trk_patch(const trk_t *t, uint8_t *out32, int *edge)
             int sx = ox + (i * side) / 32;
             uint8_t v;
 
-            if (sx < 0 || sy < 0 || sx > TRK_W - 1 || sy > 239) {
-                v = nbg ? (uint8_t)bg : 0;
-            } else {
+            if (sx < 0 || sy < 0 || sx > TRK_W - 1 || sy > 239)
+                v = (uint8_t)bg;
+            else
                 v = (uint8_t)(ARES_MMIO32(TRK_L_BASE +
                         (uint32_t)(sy * TRK_W + sx) * 4u) & 0xFFu);
-            }
             out32[j * 32 + i] = v;
         }
     }
-    (void)off;
     return 1;
 }
 
