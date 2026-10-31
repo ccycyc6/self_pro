@@ -15,7 +15,10 @@ package ares_pkg;
   localparam logic [31:0] DDR_BASE       = 32'h8000_0000;
   localparam logic [31:0] DDR_SIZE       = 32'h4000_0000;
   localparam logic [31:0] MMIO_BASE      = 32'hD000_0000;
-  localparam logic [31:0] MMIO_SIZE      = 32'h0001_0000;
+  // 16 MB: the peripheral space now holds two 320x240 frame windows (300 KB
+  // each), which do not fit in the original 64 KB.  The simulation caught this:
+  // loads beyond 0xD000_FFFF were routed to DDR and returned zero.
+  localparam logic [31:0] MMIO_SIZE      = 32'h0100_0000;
   localparam logic [31:0] MT_BASE        = 32'hE000_0000;
   localparam logic [31:0] MT_SIZE        = 32'h0000_1000;
 

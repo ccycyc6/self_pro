@@ -13,6 +13,40 @@ module tb_soc;
   logic [31:0] cam_frame = 32'd0;
   logic [31:0] cam_wrcnt = 32'd0;
   logic [23:0] cam_dbg = 24'd0;
+  // ---------------------------------------------------------- stereo windows
+  // Two frame memories with the same registered read as stereo_store, filled
+  // with a textured pair whose right eye is the left one shifted by 9 pixels.
+  // This is what lets the simulation catch address/decode mistakes instead of
+  // burning a 12 minute bitstream on them.
+  logic [17:0] st_l_a, st_r_a;
+  logic [7:0]  st_l_d, st_r_d;
+  logic [7:0]  st_l_mem[0:76799];
+  logic [7:0]  st_r_mem[0:76799];
+
+  function automatic [7:0] tex(input integer xx, input integer yy);
+    integer v;
+    begin
+      v = (xx * 13 + yy * 7 + ((xx * xx) >> 3) + ((yy * yy) >> 2)) & 255;
+      tex = v[7:0];
+    end
+  endfunction
+
+  integer sxx, syy;
+  initial begin
+    for (syy = 0; syy < 240; syy = syy + 1)
+      for (sxx = 0; sxx < 320; sxx = sxx + 1) begin
+        st_l_mem[syy * 320 + sxx] = tex(sxx, syy);
+        // a point at left x appears at right x-9, so right(u) = left(u+9)
+        st_r_mem[syy * 320 + sxx] = tex(sxx + 9, syy);
+      end
+  end
+
+  always @(posedge clk) begin
+    st_l_d <= st_l_mem[st_l_a[16:0]];
+    st_r_d <= st_r_mem[st_r_a[16:0]];
+
+  end
+
   logic [191:0] osd_boxes;
   logic         osd_tog;
   logic [39:0]  osd_text;
@@ -28,7 +62,8 @@ module tb_soc;
     .gpio_in, .gpio_out, .gpio_dir,
     .cam_addr, .cam_bank, .cam_data, .cam_frame, .cam_wrcnt, .cam_dbg,
     .cam2_addr, .cam2_data(16'd0), .cam2_frame(32'd0),
-    .st_l_addr(), .st_l_data(8'd0), .st_r_addr(), .st_r_data(8'd0),
+    .st_l_addr(st_l_a), .st_l_data(st_l_d),
+    .st_r_addr(st_r_a), .st_r_data(st_r_d),
     .osd_boxes, .osd_tog, .osd_text,
     .mt_irq, .dbg_halt, .dbg_pc, .dbg_commit,
     .dbg_pc_f, .dbg_ifid_valid, .dbg_idex_valid, .dbg_exmem_valid,

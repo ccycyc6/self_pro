@@ -93,3 +93,21 @@ yolo: sim
 
 clean:
 	rm -rf build
+
+# ---------------------------------------------------------------- stereo sim
+# Runs the stereo window path in the SoC simulation: the testbench fills the two
+# frame memories with a shifted pair, the firmware reads them through the MMIO
+# windows and reports the disparity.  Expected: 9.00 px.
+STEREO_SIM_SRC := firmware/common/start.S firmware/common/runtime.c   firmware/yolo/stereo.c firmware/yolo/main_stereo_sim.c
+
+stereo-sim: sim
+	rm -rf build/stereo_sim
+	mkdir -p build/stereo_sim
+	for f in $(STEREO_SIM_SRC); do 	  $(CC) $(CFLAGS) -Ifirmware/yolo -c $$f -o build/stereo_sim/$$(basename $$f).o; 	done
+	$(CC) $(LDFLAGS) build/stereo_sim/*.o -lgcc -o build/stereo_sim/stereo.elf
+	$(OBJCOPY) -O binary build/stereo_sim/stereo.elf build/stereo_sim/stereo.bin
+	python3 sim/tools/bin2hex.py build/stereo_sim/stereo.bin build/stereo_sim/stereo.hex
+	./build/obj_soc/Vtb_soc +DDR=build/stereo_sim/stereo.hex >/dev/null 2>&1 || true
+	@echo "--- stereo UART output ---"
+	@cat build/uart.log
+	@grep -q "STEREO SIM PASSED" build/uart.log
