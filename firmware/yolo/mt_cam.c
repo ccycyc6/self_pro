@@ -524,6 +524,18 @@ static int rps_classify(const uint8_t *p32, int32_t *scores)
 }
 #endif
 
+/* A fixed guide window in the middle of the stereo crop.  Tracking a moving
+ * hand turned out to be the fragile part of this demo -- the box could settle on
+ * a shadow, shrink, or drift -- while the classifier itself is verified.  So the
+ * demo asks the user to put the hand in a marked window and classifies exactly
+ * that region: no acquisition, no hold, no refit, nothing to go wrong. */
+#define INSET_X 960u
+#define INSET_Y 480u
+#define ROI_CX 16
+#define ROI_CY 14
+#define ROI_W  11
+#define ROI_H  9
+
 int yolo_camera_run(void)
 {
     static uint8_t prev32[TRK_GRID * TRK_GRID];
@@ -545,6 +557,7 @@ int yolo_camera_run(void)
         ch = uart_poll();
         if (ch == 't') trk_set_threshold(8);
         else if (ch == 'T') trk_set_threshold(20);
+        else if (ch == 'h' || ch == 'H') dump_head = 1;
         else if (ch == 'l' || ch == 'L') { g_dump_l1 = 1; g_dump_l3 = 1; g_dump_head = 1; }
         else if (ch == 'g' || ch == 'G') mt_detect_command(0, 0);
         else if (ch == 'x' || ch == 'X') {
@@ -592,79 +605,96 @@ int yolo_camera_run(void)
         n = trk_step(prev32, cur32, list, 4);
         for (i = 0; i < n; i++) trk_fit(&list[i], cur32);
 
-        /* One box only: the largest track is the hand, everything else on the
-         * grid is noise or a second blob of the same hand. */
+        /* The classifier reads camera 1 through the stereo window: its centre
+         * 640x480, downsampled 2:1, so grid cell (gx,gy) sits at screen
+         * (320 + gx*20, 120 + gy*15).  The guide used 80 instead of 120 for the
+         * vertical offset, so it pointed 40 pixels above the region actually
+         * classified and a hand placed on it fell out of the window. */
         {
-            int best = 0, k;
+            uint32_t gx0 = 320u + (uint32_t)((ROI_CX - ROI_W / 2) * 10) * 2u;
+            uint32_t gy0 = 120u + (uint32_t)(((ROI_CY - ROI_H / 2) * 15) / 2) * 2u;
+            uint32_t gx1 = 320u + (uint32_t)((ROI_CX + ROI_W / 2) * 10) * 2u;
+            uint32_t gy1 = 120u + (uint32_t)(((ROI_CY + ROI_H / 2) * 15) / 2) * 2u;
 
-            for (k = 1; k < n; k++)
-                if (list[k].w * list[k].h > list[best].w * list[best].h) best = k;
-
-            if (n > 0) draw_track(&list[best], 0u);
-
-            for (k = (n > 0 ? 1 : 0); k < 4; k++) {
-                uint32_t base = OSD_BOX_BASE + (uint32_t)k * 16u;
-                ares_mmio_write(base + 0u, 0u);
-                ares_mmio_write(base + 4u, 0u);
-                ares_mmio_write(base + 8u, 0u);
-                ares_mmio_write(base + 12u, 0u);
-            }
+            ares_mmio_write(OSD_BOX_BASE + 0u,  gx0);
+            ares_mmio_write(OSD_BOX_BASE + 4u,  gy0);
+            ares_mmio_write(OSD_BOX_BASE + 8u,  gx1);
+            ares_mmio_write(OSD_BOX_BASE + 12u, gy1);
+            ares_mmio_write(OSD_BOX_BASE + 16u, 0u);
+            ares_mmio_write(OSD_BOX_BASE + 20u, 0u);
+            ares_mmio_write(OSD_BOX_BASE + 24u, 0u);
+            ares_mmio_write(OSD_BOX_BASE + 28u, 0u);
         }
+
         ares_mmio_write(OSD_BOX_BASE + 0x40u, 1u);
-        publish_count(n);
 
 #ifdef RPS_WEIGHTS
-        /* One hand only: the largest track is classified, and the answer is
-         * only accepted when a score clearly wins.  The screen shows the
-         * majority of the last few accepted answers, so a held pose reads
-         * steady instead of flickering between classes. */
-        if ((frames & 0x03u) == 0u && n > 0) {
+        /* Fixed window, classified every other frame.  The result goes to the
+         * serial port once a second and nowhere else: digits on the picture
+         * were unreadable while the class was still settling. */
+        if ((frames & 0x01u) == 0u) {
             static uint8_t cls_patch[32 * 32];
-            static int8_t hist[5];
-            static int hist_n;
-            static int shown = -1;
-            static uint32_t last_box;
-            const trk_t *t = &list[0];
-            int32_t sc[3];
-            int k, best_track = 0, edge = 0;
+            static int cand, cand_n, shown = -1;
+            static uint32_t next_report;
+            static const char *names[3] = {"rock", "paper", "scissors"};
+            trk_t fixed;
+            int edge = 0;
 
-            for (k = 1; k < n; k++)
-                if (list[k].w * list[k].h > list[best_track].w * list[best_track].h)
-                    best_track = k;
-            t = &list[best_track];
+            fixed.used = 1;
+            fixed.confirmed = 1;
+            fixed.cx = ROI_CX;
+            fixed.cy = ROI_CY;
+            fixed.w = ROI_W;
+            fixed.h = ROI_H;
+            fixed.hits = 3;
+            fixed.misses = 0;
+            fixed.held = 0;
 
-            if (trk_patch(t, cls_patch, &edge) && !edge) {
-                int c = rps_forward(cls_patch, sc);
-                int best = 0, second = -9999;
+            if (trk_patch(&fixed, cls_patch, &edge) && !edge) {
+                int32_t sc[3] = {0, 0, 0};
+                int lo = 255, hi = 0, k2, c = -1, margin = 0;
+                uint32_t sum2 = 0;
 
-                if (c >= 0) {
-                    for (k = 0; k < 3; k++) {
-                        if (sc[k] > sc[best]) { second = sc[best]; best = k; }
-                        else if (sc[k] > second) second = sc[k];
-                    }
-                    if (sc[best] - second >= 2) {
-                        hist[hist_n % 5] = (int8_t)best;
-                        hist_n++;
-                        {
-                            int vote[3] = {0, 0, 0}, i2, top = 0;
-
-                            for (i2 = 0; i2 < 5 && i2 < hist_n; i2++) vote[hist[i2]]++;
-                            for (i2 = 1; i2 < 3; i2++) if (vote[i2] > vote[top]) top = i2;
-                            if (vote[top] >= 2) shown = top;
-                        }
-                    }
-                    printf("hand: now %d (%d,%d,%d) shown %d box %d,%d %dx%d px %d,%d,%d,%d\n",
-                           c, (int)sc[0], (int)sc[1], (int)sc[2], shown,
-                           t->cx, t->cy, t->w, t->h,
-                           cls_patch[0], cls_patch[1], cls_patch[2], cls_patch[3]);
+                for (k2 = 0; k2 < 32 * 32; k2++) {
+                    if (cls_patch[k2] < lo) lo = cls_patch[k2];
+                    if (cls_patch[k2] > hi) hi = cls_patch[k2];
+                    sum2 += cls_patch[k2];
                 }
 
-                {
-                    uint32_t v[8];
-                    for (k = 0; k < 8; k++) v[k] = GLYPH_SPACE;
-                    if (shown >= 0) v[0] = (uint32_t)(shown + 1);
-                    for (k = 0; k < 8; k++)
-                        ares_mmio_write(OSD_TEXT_BASE + (uint32_t)k * 4u, v[k]);
+                if (hi - lo >= 20) {
+                    c = rps_forward(cls_patch, sc);
+                    if (c >= 0) {
+                        /* Start from the first score and walk the rest.  The
+                         * previous loop started with best = 0 AND compared
+                         * sc[0] against itself first, which set second = sc[0]
+                         * whenever class 0 was the winner -- every margin came
+                         * out as 0, the confidence gate never passed, and the
+                         * reported class stuck at whatever it had been. */
+                        int best = 0, second = -9999, k;
+
+                        for (k = 1; k < 3; k++) {
+                            if (sc[k] > sc[best]) { second = sc[best]; best = k; }
+                            else if (sc[k] > second) second = sc[k];
+                        }
+                        margin = sc[best] - second;
+                        if (margin >= 8) {
+                            if (best == shown) cand_n = 0;
+                            else if (best == cand) { if (++cand_n >= 2) { shown = best; cand_n = 0; } }
+                            else { cand = best; cand_n = 1; }
+                        }
+                    }
+                }
+
+                if (mt_rd_mcycle() >= next_report) {
+                    next_report = mt_rd_mcycle() + 27000000u;
+
+                    if (c < 0)
+                        printf("hand: none   (window %d..%d, no contrast)\n", lo, hi);
+                    else
+                        printf("hand: %-8s scores %4d %4d %4d  margin %2d  shown %s\n",
+                               margin >= 8 ? names[c] : "(weak)",
+                               (int)sc[0], (int)sc[1], (int)sc[2], margin,
+                               shown >= 0 ? names[shown] : "-");
                 }
             }
         }

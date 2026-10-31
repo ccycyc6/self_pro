@@ -92,12 +92,20 @@ void trk_fit(trk_t *t, const uint8_t *grid)
     wx1 = t->cx + 9; if (wx1 > TRK_GRID - 1) wx1 = TRK_GRID - 1;
     wy1 = t->cy + 9; if (wy1 > TRK_GRID - 1) wy1 = TRK_GRID - 1;
 
-    for (y = wy0; y <= wy1; y++)
-        for (x = wx0; x <= wx1; x++) {
+    /* The threshold comes from the WHOLE grid, not from the search window.
+     * Taking it from the window was a positive feedback loop: a slightly
+     * smaller box meant a window filled with hand, a lower mean, a lower
+     * threshold, and a smaller box again, until the box collapsed onto the
+     * darkest patch.  The wall dominates the frame, so the grid mean is a
+     * stable background estimate. */
+    for (y = 0; y < TRK_GRID; y++)
+        for (x = 0; x < TRK_GRID; x++) {
             sum += grid[y * TRK_GRID + x];
             n++;
-            seen[y * TRK_GRID + x] = 0;
         }
+    for (y = wy0; y <= wy1; y++)
+        for (x = wx0; x <= wx1; x++)
+            seen[y * TRK_GRID + x] = 0;
     if (n == 0) return;
     mean = (int)(sum / (uint32_t)n);
 
@@ -146,10 +154,24 @@ void trk_fit(trk_t *t, const uint8_t *grid)
 
     if (best_area < 3) return;                 /* nothing solid found */
 
-    t->cx = (bx0 + bx1) / 2;
-    t->cy = (by0 + by1) / 2;
-    t->w  = bx1 - bx0 + 1;
-    t->h  = by1 - by0 + 1;
+    /* Smooth the refit.  Taking the blob's bounding box straight every frame
+     * made the box breathe by 30% from frame to frame, and because the
+     * classifier's input is normalised by the box size, the hand kept changing
+     * apparent size and the classes jumped with it. */
+    {
+        int ncx = (bx0 + bx1) / 2, ncy = (by0 + by1) / 2;
+        int nw = bx1 - bx0 + 1, nh = by1 - by0 + 1;
+
+        /* A refit that suddenly reports half the size is a partial detection
+         * (the hand half out of the window, or a pale sleeve), not a smaller
+         * hand; keep the previous box instead of following it down. */
+        if (nw * 2 < t->w || nh * 2 < t->h) return;
+
+        t->cx = (t->cx * 2 + ncx) / 3;
+        t->cy = (t->cy * 2 + ncy) / 3;
+        t->w  = (t->w * 2 + nw) / 3;
+        t->h  = (t->h * 2 + nh) / 3;
+    }
     (void)i;
 }
 
@@ -291,6 +313,81 @@ static int merge_blobs(int nb)
     return nb;
 }
 
+/* Acquire without motion: a hand held still produces no frame difference at
+ * all, and the tracker would never see it.  Look for the largest region that is
+ * clearly darker than the background across the whole grid and start a track
+ * from it, already confirmed.  Motion still wins when something moves, because
+ * the difference image is sharper. */
+static int acquire_from_brightness(const uint8_t *grid)
+{
+    static uint8_t seen[TRK_GRID * TRK_GRID];
+    uint32_t sum = 0;
+    int i, x, y, mean, thr;
+    int best_area = 0, bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+
+    for (i = 0; i < TRK_GRID * TRK_GRID; i++) sum += grid[i];
+    mean = (int)(sum / (TRK_GRID * TRK_GRID));
+    thr = mean - 18;
+    if (thr < 30) thr = 30;
+
+    for (i = 0; i < TRK_GRID * TRK_GRID; i++) seen[i] = 0;
+
+    for (i = 0; i < TRK_GRID * TRK_GRID; i++) {
+        int sp = 0, area = 0;
+        int x0 = TRK_GRID, y0 = TRK_GRID, x1 = 0, y1 = 0;
+
+        if (seen[i] || (int)grid[i] > thr) continue;
+
+        stack[sp++] = (int16_t)i;
+        seen[i] = 1;
+        while (sp > 0) {
+            int c2 = stack[--sp];
+            int cx = c2 % TRK_GRID, cy = c2 / TRK_GRID;
+            int dy, dx;
+
+            area++;
+            if (cx < x0) x0 = cx;
+            if (cx > x1) x1 = cx;
+            if (cy < y0) y0 = cy;
+            if (cy > y1) y1 = cy;
+
+            for (dy = -1; dy <= 1; dy++)
+                for (dx = -1; dx <= 1; dx++) {
+                    int nx = cx + dx, ny = cy + dy, ni;
+                    if (nx < 0 || ny < 0 || nx >= TRK_GRID || ny >= TRK_GRID) continue;
+                    ni = ny * TRK_GRID + nx;
+                    if (!seen[ni] && (int)grid[ni] <= thr) {
+                        seen[ni] = 1;
+                        stack[sp++] = (int16_t)ni;
+                    }
+                }
+        }
+
+        if (area > best_area) {
+            best_area = area;
+            bx0 = x0; by0 = y0; bx1 = x1; by1 = y1;
+        }
+    }
+
+    (void)x; (void)y;
+    if (best_area < 8) return -1;
+
+    for (i = 0; i < TRK_MAX; i++)
+        if (!tracks[i].used) {
+            tracks[i].used = 1;
+            tracks[i].confirmed = 1;
+            tracks[i].cx = (bx0 + bx1) / 2;
+            tracks[i].cy = (by0 + by1) / 2;
+            tracks[i].w = bx1 - bx0 + 1;
+            tracks[i].h = by1 - by0 + 1;
+            tracks[i].hits = 3;
+            tracks[i].misses = 0;
+            tracks[i].held = 0;
+            return i;
+        }
+    return -1;
+}
+
 int trk_step(const uint8_t *prev, const uint8_t *cur, trk_t *out, int max_out)
 {
     int nb, i, j, n = 0;
@@ -338,6 +435,14 @@ int trk_step(const uint8_t *prev, const uint8_t *cur, trk_t *out, int max_out)
         }
         tracks[best].misses = 0;
         if (tracks[best].hits >= 3) tracks[best].confirmed = 1;
+    }
+
+    /* nothing moving and nothing tracked: look at the picture instead */
+    {
+        int any = 0;
+
+        for (i = 0; i < TRK_MAX; i++) if (tracks[i].used) any = 1;
+        if (!any) acquire_from_brightness(cur);
     }
 
     for (i = 0; i < TRK_MAX; i++) {
