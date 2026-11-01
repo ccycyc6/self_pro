@@ -37,3 +37,7 @@ venv/
 uart.log
 *.local
 fpga/pango/program_run.tcl
+
+# tool scratch
+log/
+.dide/
