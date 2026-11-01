@@ -110,16 +110,29 @@ make flash              # 重新烧固件
 | `data/` | 数据集与训练好的模型（随仓库保存） |
 | `docs/results.md` | 完整记录：踩过的五个坑、验证数字、归档产物 |
 
-## 依赖的共享部分（不在本目录）
+## 目录：自带全套
 
 | 部分 | 位置 |
 |---|---|
-| 固件应用与权重 | `firmware/yolo/mt_cam.c`、`rps_weights.h`、`rps_params.h` |
-| 跟踪与补丁裁切 | `firmware/yolo/mt_track.c` |
-| 推理（已验证的序列） | `firmware/yolo/mt_detect.c` 的 `rps_forward` |
-| 加速器驱动 | `firmware/yolo/mt_net.c`、`mt.c` |
-| 位流构建 / 烧写 / 上传 | `tools/build_pango.ps1`、`program_board.ps1`、`upload.ps1` |
-| 相机与像素通路 | `rtl/video/` |
+| 硬件：CPU、SoC、加速器、相机通路 | `rtl/` |
+| PDS 工程与引脚约束 | `fpga/` |
+| 固件全集（含生成的权重头） | `firmware/` |
+| 源转换、综合、烧写、上传 | `tools/` |
+| 位流与已编译固件 | `bitstreams/` |
+| 模型、数据、采集脚本 | `ml/`、`data/`、`scripts/` |
+
+**这个目录不依赖主仓库**：把它单独拷给别人，装好环境（WSL + riscv 工具链 +
+PDS 2025.2 + Python 依赖）就能从零重建、烧写、跑起来。
+
+```bash
+make bitstream   # 从 rtl/ 重新综合出位流（约 12 分钟；通常直接用 bitstreams/ 里的）
+make fw          # 编译固件
+make flash       # 烧写 + 上传
+make watch       # 看识别结果
+```
+
+> 注意：`rtl/`、`fpga/`、`firmware/` 是主仓库的**快照**，便于整套交付。
+> 若两边都改，以主仓库为准；这份拷贝的目的是"能独立跑"，不是并行维护。
 
 ## 已知限制
 

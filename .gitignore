@@ -43,3 +43,5 @@ log/
 .dide/
 
 projects/*/build/
+
+subprojects/*/build/

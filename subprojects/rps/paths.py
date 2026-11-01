@@ -14,7 +14,12 @@ ROOT = SUB.parents[1]
 BUILD = ROOT / "build"
 DATA = SUB / "data"
 DOCS = SUB / "docs"
-FIRMWARE_YOLO = ROOT / "firmware" / "yolo"
+# This sub-project can be used two ways: nested inside the main repository, or
+# handed over as a standalone tree.  When it carries its own firmware/ (the
+# standalone case) the generated headers go there; otherwise they go to the
+# repository's own copy.
+_LOCAL_FW = SUB / "firmware" / "yolo"
+FIRMWARE_YOLO = _LOCAL_FW if _LOCAL_FW.is_dir() else ROOT / "firmware" / "yolo"
 
 DATASET = DATA / "dataset.npz"
 FLOAT_WEIGHTS = DATA / "float.npz"

@@ -14,6 +14,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SUB = HERE.parent
 
+sys.path.insert(0, str(SUB))
+import paths
+
 
 def main():
     r = subprocess.run([sys.executable, str(HERE / "pack_rps.py")],
@@ -48,8 +51,8 @@ def main():
 
     for f in (SUB / "paths.py", SUB / "data" / "dataset.npz",
               SUB / "data" / "float.npz",
-              SUB.parents[1] / "firmware" / "yolo" / "rps_weights.h"):
-        check(f.exists(), "present: " + str(f.relative_to(SUB.parents[1])))
+              paths.WEIGHTS_H, paths.PARAMS_H):
+        check(f.exists(), "present: " + str(f))
 
     print("model tests: %s (%d failure%s)" %
           ("PASSED" if not fails else "FAILED", fails, "" if fails == 1 else "s"))

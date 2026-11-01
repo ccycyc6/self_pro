@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# video_fb_top only: camera pixel clock + framebuf CDC boundaries.
+#
+# video_capture_wrap divides cmos1_pclk by 2 in GTP_IOCLKDIV_E2; the top then
+# pushes pixel_clk_io through GTP_CLKBUFG so the DDR3 framebuf write side can
+# span clock regions.  PDS does not put this divided clock in the
+# cmos1_pclk group, so name it explicitly.
+#
+# wr_buf/rd_buf contain async FIFOs between:
+#   pixel_clk  <-> ddrphy_sysclk (DDR3 core clock)
+#   ddrphy_sysclk <-> pix_clk       (HDMI read side)
+# Declare those boundaries asynchronous; the vendor FIFOs use gray pointers.
+#
+# CAM_SEL=1 builds take the pixel clock from cmos2_pclk: change the -source
+# port (and -master_clock) accordingly.
+# ---------------------------------------------------------------------------
+create_generated_clock -name pixel_clk -source [get_ports {cmos1_pclk}] \
+    [get_nets {pixel_clk_io}] -master_clock [get_clocks {cmos1_pclk}] \
+    -multiply_by 1 -divide_by 2
+
+set_false_path -from [get_clocks {pixel_clk}] -to [get_clocks {ddrphy_sysclk}]
+set_false_path -from [get_clocks {ddrphy_sysclk}] -to [get_clocks {pixel_clk}]
+set_false_path -from [get_clocks {pixel_clk}] -to [get_clocks {pix_clk}]
+set_false_path -from [get_clocks {pix_clk}] -to [get_clocks {pixel_clk}]
+set_false_path -from [get_clocks {ddrphy_sysclk}] -to [get_clocks {pix_clk}]
+set_false_path -from [get_clocks {pix_clk}] -to [get_clocks {ddrphy_sysclk}]
+set_false_path -from [get_clocks {pixel_clk}] -to [get_clocks {sys_clk}]
+set_false_path -from [get_clocks {sys_clk}] -to [get_clocks {pixel_clk}]
+set_false_path -from [get_clocks {ddrphy_sysclk}] -to [get_clocks {sys_clk}]
+set_false_path -from [get_clocks {sys_clk}] -to [get_clocks {ddrphy_sysclk}]
+set_false_path -from [get_clocks {cfg_clk}] -to [get_clocks {ddrphy_sysclk}]
+set_false_path -from [get_clocks {ddrphy_sysclk}] -to [get_clocks {cfg_clk}]
