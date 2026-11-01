@@ -533,8 +533,8 @@ static int rps_classify(const uint8_t *p32, int32_t *scores)
 #define INSET_Y 480u
 #define ROI_CX 16
 #define ROI_CY 14
-#define ROI_W  11
-#define ROI_H  9
+#define ROI_W  13
+#define ROI_H  11
 
 int yolo_camera_run(void)
 {

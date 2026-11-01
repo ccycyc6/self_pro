@@ -1,5 +1,7 @@
 #include "ares_soc.h"
 #include <stdarg.h>
+
+void uart_putc_raw(char c);
 #include <stddef.h>
 
 #ifndef UART_DIV
@@ -12,10 +14,19 @@ void uart_init(uint32_t baud_div)
   ares_mmio_write(UART_BAUD, baud_div);
 }
 
-void uart_putc(char c)
+void uart_putc_raw(char c)
 {
   while ((ares_mmio_read(UART_STATUS) & 1u) == 0u) { }
   ares_mmio_write(UART_TX, (uint32_t)(uint8_t)c);
+}
+
+/* Bare LF on a Windows console moves down without returning to column zero, so
+ * every line of output staircases.  Sending CR first fixes the terminal and is
+ * what the boot code already does. */
+void uart_putc(char c)
+{
+  if (c == '\n') uart_putc_raw('\r');
+  uart_putc_raw(c);
 }
 
 void uart_puts(const char *s)
