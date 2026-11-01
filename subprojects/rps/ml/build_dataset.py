@@ -10,14 +10,18 @@ moment to find out.
 import sys
 from pathlib import Path
 
+from pathlib import Path
+
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import paths
+
 CLASSES = ["rock", "paper", "scissors"]
 
 
 def load(name):
-    path = ROOT / "build" / f"rps_{name}.npz"
+    path = paths.CAPTURES[name]
     if not path.exists():
         msg = ("missing " + path.name + ": record the three gestures first\n"
                "  make -C subprojects/rps capture\n"
@@ -41,6 +45,10 @@ def knn_accuracy(xtr, ytr, xte, yte, k=3):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+
     xs, ys = [], []
     for i, name in enumerate(CLASSES):
         x = load(name)
@@ -51,7 +59,7 @@ def main():
     x = np.concatenate(xs)
     y = np.concatenate(ys)
 
-    np.savez_compressed(ROOT / "subprojects" / "rps" / "data" / "dataset.npz", x=x, y=y)
+    np.savez_compressed(paths.DATASET, x=x, y=y)
     print(f"dataset: {x.shape} -> build/rps_dataset.npz")
 
     # held-out split, stratified

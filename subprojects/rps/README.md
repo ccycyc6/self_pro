@@ -39,6 +39,18 @@ hand: none     (window 148..164, no contrast)
 | 板端 8 张打包图像 | **8/8 与离线一致** |
 | 端到端延迟 | 约 0.2 秒（3 帧一致才更新） |
 
+## 环境
+
+| 需要 | 版本 | 用途 |
+|---|---|---|
+| Python | 3.10+ | 采集解析、训练、打包 |
+| numpy / torch | 见 `requirements.txt` | `pip install -r requirements.txt` |
+| WSL（Ubuntu） | 任意 | 跑 Python 与 gcc 单测 |
+| riscv64-unknown-elf-gcc | 随工具链 | 编译固件 |
+| PDS 2025.2 | `D:\Pango\...` | 只有重建位流才需要 |
+
+版本号在 `VERSION`，变更在 `CHANGELOG.md`。
+
 ## 快速开始
 
 ```bash
@@ -54,9 +66,28 @@ powershell subprojects/rps/scripts/watch_serial.ps1
 或者在本目录：
 
 ```bash
+make test      # 模型集成测试 + 跟踪器单测（不需要硬件）
+make repro     # 从 data/dataset.npz 重新训练→打包→校验→编译
 make flash     # 烧位流 + 编译上传固件
 make watch     # 实时看串口
-make check     # 用打包后的 INT8 模型跑一遍数据集，应打印 100%
+make check     # 用打包后的 INT8 模型跑一遍数据集
+```
+
+## 自检（跑完应看到这些数字）
+
+```
+$ make test
+ok: dataset has at least 200 patches (got 287)
+ok: integer model classifies all patches (got 100.0%)
+ok: eight packed images (got 8)
+model tests: PASSED (0 failures)
+track tests: PASSED (0 failures)
+
+$ make repro
+epoch 119  loss 0.2150  test 100.0%  augmented-test  92.0%
+integer accuracy on all 287 captured patches: 100.0%
+gold image labels: [2, 2, 2, 2, 2, 1, 1, 1]
+ 70772 bytes  build/fw/cam_board.bin
 ```
 
 ## 重新采数据 / 训练
@@ -73,7 +104,8 @@ make flash              # 重新烧固件
 
 | 路径 | 内容 |
 |---|---|
-| `ml/` | 采集、聚类、可视化、训练、量化打包、跟踪器单测 |
+| `paths.py` | 全部路径的唯一来源（脚本不再自己算仓库根） |
+| `ml/` | 采集、聚类、可视化、训练、量化打包、模型与跟踪器测试 |
 | `scripts/` | 串口监视 |
 | `data/` | 数据集与训练好的模型（随仓库保存） |
 | `docs/results.md` | 完整记录：踩过的五个坑、验证数字、归档产物 |

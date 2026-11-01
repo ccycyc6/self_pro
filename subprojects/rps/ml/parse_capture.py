@@ -10,7 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[3]
+SUB = Path(__file__).resolve().parents[1]
+ROOT = SUB.parents[1]
 W = H = 32
 N = W * H
 
