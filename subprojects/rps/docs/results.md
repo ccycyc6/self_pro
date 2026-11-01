@@ -133,7 +133,7 @@ hand: none     (window 148..164, no contrast)
 ```
 cam1 (720p) ──► stereo_cap（取中心 640x480，2:1 降采样）──► 0xD010_0000
                                                               │
-固件：固定取景区（网格 16,14，11x9）──► letterbox 32x32 ──► 量化 ──► 加速器四层网络
+固件：固定取景区（网格 16,14，13x11）──► letterbox 32x32 ──► 量化 ──► 加速器四层网络
                                                               │
                                      每帧一次 argmax + 裕度门限(4) + 连续 3 帧一致
                                                               │
@@ -172,3 +172,15 @@ cam1 (720p) ──► stereo_cap（取中心 640x480，2:1 降采样）──►
 | 位流 sha256 | `141344AD702160D0D216C306B5E2FD8B6301998B9998E41A2B8B810AA4B08404` |
 | 固件 | `build/fw/cam_board.bin`（70772 字节，编译时带 `-DRPS_WEIGHTS`） |
 | 复现命令 | `tools/build_pango.ps1`（如需位流）；`EXTRA_DEFS='-DRPS_WEIGHTS' bash tools/build_cam_board.sh`；`tools/program_board.ps1`；`tools/upload.ps1` |
+
+## 收尾（2026-11-01 11:20）
+
+两处按现场反馈调整，均已上板确认：
+
+| 调整 | 原因 | 结果 |
+|---|---|---|
+| 取景框 11x9 → **13x11 格**（约 240x165 px） | 原框太小，手不好放进去 | 裕度仍充足，识别正常 |
+| 串口输出补 **CR** | 只发 LF，Windows 控制台不回行首，每行叠在一起 | 每行 CR+LF，输出正常 |
+
+另外把固件里的 UART 写字符统一处理（`uart_putc` 遇 `\n` 先发 `\r`），
+boot 信息、调试信息和识别结果都受益。
