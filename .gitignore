@@ -41,3 +41,5 @@ fpga/pango/program_run.tcl
 # tool scratch
 log/
 .dide/
+
+projects/*/build/
