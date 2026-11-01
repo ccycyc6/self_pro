@@ -60,7 +60,7 @@ EXTRA_DEFS='-DRPS_WEIGHTS' bash tools/build_cam_board.sh
 powershell tools/upload.ps1 -Port COM9 -File build/fw/cam_board.bin
 
 # 2. 看结果
-powershell subprojects/gesture/scripts/watch_serial.ps1
+powershell yolo_gesture/scripts/watch_serial.ps1
 ```
 
 或者在本目录：

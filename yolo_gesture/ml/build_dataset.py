@@ -24,7 +24,7 @@ def load(name):
     path = paths.CAPTURES[name]
     if not path.exists():
         msg = ("missing " + path.name + ": record the three gestures first\n"
-               "  make -C subprojects/gesture capture\n"
+               "  make -C yolo_gesture capture\n"
                "  (each gesture in its own pass, so the labels are certain)")
         raise SystemExit(msg)
     return np.load(path)["x"]

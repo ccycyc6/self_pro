@@ -130,4 +130,4 @@ decodes the head's centroid for the demo.
 
 | 项目 | 说明 |
 |---|---|
-| [石头剪刀布手势识别](subprojects/gesture/README.md) | 单手手势实时识别：固定取景框 + 32×32 INT8 分类器，串口每秒输出结果 |
+| [石头剪刀布手势识别](yolo_gesture/README.md) | 单手手势实时识别：固定取景框 + 32×32 INT8 分类器，串口每秒输出结果 |

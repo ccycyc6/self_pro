@@ -39,7 +39,7 @@
 │   ├── mkfont.py  mkrom.py         字模、启动 ROM
 │   └── model/                      YOLO/检测器训练与量化打包（可复用于新目标）
 ├── bitstreams/                 位流归档（烧写用，见其 README）
-├── subprojects/gesture/            石头剪刀布手势识别（示例工程）
+├── yolo_gesture/            石头剪刀布手势识别（示例工程）
 ├── docs/
 │   ├── tree.md                     本文件
 │   ├── board_runbook.md            板上操作手册与故障表
@@ -52,7 +52,7 @@
 ## 用这套东西做新目标
 
 1. **网络**在第 4 层以内、输入 32×32×4、INT8 时，`tools/model/` 里的训练与
-   `pack_weights.py` 可以直接复用（`subprojects/gesture/ml/pack_rps.py` 是分类头的范例）；
+   `pack_weights.py` 可以直接复用（`yolo_gesture/ml/pack_rps.py` 是分类头的范例）；
 2. **固件**改 `firmware/yolo/mt_cam.c`：取图 → 组输入 → `rps_forward` 式的推理 → 输出；
 3. 只要不动 `rtl/`，**不需要重建位流**（12 分钟省下来）；
 4. 动了 `rtl/` 就按 `docs/board_runbook.md` 走：`make stereo-sim`/`make yolo` 先过，

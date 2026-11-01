@@ -20,7 +20,7 @@ ROOT = SUB.parents[1]
 import sys as _sys
 _sys.path.insert(0, str(SUB))
 import paths as _paths
-sys.path.insert(0, str(ROOT / "tools" / "model"))
+sys.path.insert(0, str(SUB / "tools" / "model"))
 
 import pack_weights as pw   # reuse the row packing and cfg builder
 

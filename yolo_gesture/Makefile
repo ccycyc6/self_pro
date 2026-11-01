@@ -1,7 +1,7 @@
 # 石头剪刀布手势识别 —— 自包含工程
 #
 # 这个目录里带着跑起来所需要的一切：rtl/、fpga/、firmware/、tools/、位流。
-# 不需要主仓库的任何东西（它只是恰好住在主仓库的 subprojects/ 下）。
+# 不需要主仓库的任何东西：它只是恰好放在主仓库根目录下，单独拷走一样能用。
 SHELL := /bin/bash
 HERE  := $(CURDIR)
 PY    ?= python3

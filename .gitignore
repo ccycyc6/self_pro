@@ -44,4 +44,4 @@ log/
 
 projects/*/build/
 
-subprojects/*/build/
+yolo_gesture/build/
