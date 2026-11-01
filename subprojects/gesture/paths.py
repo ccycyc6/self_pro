@@ -7,7 +7,7 @@ sub-project.  Import from here instead.
 """
 from pathlib import Path
 
-# subprojects/rps/paths.py -> subprojects/rps -> subprojects -> repo root
+# subprojects/gesture/paths.py -> subprojects/gesture -> subprojects -> repo root
 SUB = Path(__file__).resolve().parent
 ROOT = SUB.parents[1]
 

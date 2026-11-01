@@ -16,7 +16,7 @@ if {[info exists ::env(CDT_JS_PORT)]} { set jsport $::env(CDT_JS_PORT) }
 puts "program: connecting to 127.0.0.1:$jsport"
 cfg_connect -ip 127.0.0.1 -port $jsport
 cfg_scan_chain
-cfg_assign_file -file E:/qs/5-stage-baseline/subprojects/rps/bitstreams/s3h_video_fb_top.sbit -device_index 0
+cfg_assign_file -file E:/qs/5-stage-baseline/subprojects/gesture/bitstreams/s3h_video_fb_top.sbit -device_index 0
 cfg_program -device_index 0
 cfg_disconnect
 cfg_close
