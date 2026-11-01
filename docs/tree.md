@@ -1,82 +1,78 @@
-# 目录结构说明
+# 目录结构
 
-> 生成于 2026-11-01，基线 `s3h`。只描述**会长期保留**的东西；
-> `build/` 下的构建产物随时可删。
+> 2026-11-01。`build/` 里的东西随时可删；其余都是长期资产。
 
 ```
 5-stage-baseline/
-├── rtl/                 硬件设计（SystemVerilog，ADS 前由 pango_prep 改写）
-│   ├── core/            RV32IM 五级流水线 CPU
-│   ├── cache/           I-cache
-│   ├── common/          ares_pkg（地址映射）、总线定义
-│   ├── soc/             SoC 顶层、L2、MMIO 外设、UART/GPIO/CLINT
-│   │   ├── ares_soc.sv          SoC 顶层（CPU + L2 + MMIO）
-│   │   ├── ares_mmio_bus.sv     外设译码：相机窗口、OSD、stereo 窗口
-│   │   └── ares_core_complex.sv CPU 侧总线与 MMIO 判定
-│   ├── minitensor/      张量加速器（4×4 INT8 阵列、命令队列、DMA）
-│   └── video/           视频通路（S2 厂商工程改写）
-│       ├── video_fb_top.v       视频顶层（720p + 双相机 + OSD）
-│       ├── video_capture_wrap.v 单相机 DVP 采集 + I2C 初始化
-│       ├── cam_cap.v            32×32 缩略图（检测用）
-│       ├── stereo_cap.v         320×240 灰度（测距用）
-│       ├── stereo_store.v / pip_buf.v / video_pip.v   画中画
-│       ├── video_osd.v + video_font.v  4 个框 + 8 个七段数字
-│       └── legacy/              厂商原始模块（DDR3/Hdmi/I2C 等）
-├── fpga/pango/          PDS 工程
-│   ├── flow_full.tcl    完整流程（compile→synth→p&r→bitstream）
-│   ├── video_top.fdc    引脚与时序约束
-│   └── ip/              DDR3 等 IP
+├── rtl/                      硬件（SystemVerilog，PDS 前由 pango_prep 改写）
+│   ├── core/  cache/  common/     CPU、缓存、地址映射
+│   ├── soc/                      SoC 顶层、MMIO 外设、UART/GPIO/CLINT
+│   ├── minitensor/               INT8 张量加速器
+│   └── video/                    相机与像素通路（采集、画中画、OSD）
+├── fpga/pango/               PDS 工程：flow_full.tcl、引脚约束、DDR3 IP
 ├── firmware/
-│   ├── boot/            boot ROM loader
-│   ├── common/          start.S、runtime.c（printf/uart）、ares_soc.h
-│   └── yolo/            相机与加速器固件
-│       ├── mt_cam.c         相机主程序（测距/物体/诊断，当前主线）
-│       ├── stereo.c/.h      块匹配（纯函数，主机可测）
-│       ├── mt.c / mt_net.c  miniTensor 驱动与卷积/池化
-│       ├── mt_detect.c      离线检测器 + 基准/单元测试
-│       └── mt_detect_weights.h  打包后的 INT8 权重（pack_weights 生成）
-├── sim/                 Verilator 仿真
-│   ├── rtl/tb_soc.sv            SoC 级测试台（跑真实固件，含 stereo 窗口模型）
-│   ├── rtl/tb_pip.sv           画中画叠加
-│   ├── rtl/tb_stereo_cap.sv    320×240 采集地址/裁剪
-│   └── tools/bin2hex.py
-├── tools/
-│   ├── pango_prep.py            SV→V-2001 改写（**PDS 前必须跑**）
-│   ├── build_pango.ps1          一条命令：prep → PDS → 报 sha256
-│   ├── program_board.ps1        烧位流（自动找 2025/2022 的 cdt_js）
-│   ├── upload.ps1               通过 boot loader 上传固件
-│   ├── build_cam_board.sh       编译相机固件
-│   ├── mkfont.py                七段字模生成器
-│   ├── model/                   torch/numpy 训练与量化打包
-│   └── stereo/                  sim_stereo.py（离线模型）、test_stereo.c（主机测试）
-├── docs/
-│   ├── goals.md              目标清单（G0…G7）与状态
-│   ├── plan_fx.md            视觉增强 + 运动检测实施计划（当前）
-│   ├── advanced_plan.md      性能/加速器/多目标的完整技术记录
-│   ├── board_runbook.md      板上操作手册（烧写/上传/故障表）
-│   └── stereo_plan.md        双目测距规划（历史）
-└── build/                构建产物（可删）
-    ├── release/         归档的位流（s3h、p3a）
-    ├── fw/cam_board.bin 当前固件
-    ├── pango/s3h/       当前位流工程（含 sha）
-    └── uart.log         仿真串口输出
+│   ├── boot/  common/            启动 ROM、runtime、链接脚本
+│   ├── tests/                    冒烟测试
+│   └── yolo/                     相机应用与加速器驱动（共享）
+│       ├── mt_cam.c              主程序：取景、分类、串口输出
+│       ├── mt_track.c            运动检测与跟踪
+│       ├── mt_detect.c           推理序列（含 rps_forward，已用 golden 验证）
+│       ├── mt_net.c  mt.c        加速器驱动
+│       └── rps_weights.h  rps_params.h   由子项目打包生成（勿手改）
+├── sim/rtl/                  Verilator 测试台（SoC、画中画、采集）
+├── tools/                    共享工具
+│   ├── pango_prep.py             SV→V 改写（PDS 前必须跑）
+│   ├── build_pango.ps1           一条命令：prep → PDS → sha256
+│   ├── program_board.ps1         烧位流
+│   ├── upload.ps1                上传固件
+│   ├── build_cam_board.sh        编译固件
+│   ├── mkfont.py  mkrom.py       字模、启动 ROM
+│   └── model/                    检测器权重打包与训练（历史）
+├── subprojects/
+│   └── rps/                  ★ 石头剪刀布手势识别（独立子项目）
+│       ├── README.md             目标、指标、快速开始、已知限制
+│       ├── Makefile              flash / watch / check / capture / train / pack
+│       ├── ml/                   采集、聚类、可视化、训练、打包、跟踪器单测
+│       ├── scripts/watch_serial.ps1
+│       ├── data/                 数据集与训练好的模型（随仓库保存）
+│       └── docs/results.md       完整记录：踩过的坑、验证数字、归档产物
+├── docs/                     平台文档
+│   ├── goals.md                  目标演进
+│   ├── tree.md                   本文件
+│   ├── board_runbook.md          板上操作手册
+│   ├── advanced_plan.md          性能/加速器技术记录
+│   ├── plan_fx.md                画质增强方案（未实施）
+│   ├── plan_track.md             跟踪方案（已并入 rps）
+│   ├── stereo_plan.md            双目测距（已弃用）
+│   ├── bringup_log.md            早期 bring-up 记录
+│   ├── board_yolo_camera_plan.md
+│   └── camera_hw_checklist.md
+└── build/                    产物（可删）
+    ├── release/              归档位流：s3h（当前）、p3a（单相机）
+    ├── fw/cam_board.bin      当前固件
+    ├── pango/s3h/ p3a/       构建树
+    └── logs/                 工具日志
 ```
 
 ## 常用命令
 
 ```bash
-make yolo          # SoC 仿真 + 离线检测器（golden diff 0）
-make stereo-sim    # 双目窗口链路（期望 disparity 9.00 px）
-make sim           # 只构建 Verilator 模型
+make yolo                     # SoC 仿真 + 检测器（golden diff 0）
+make stereo-sim               # 双目窗口链路
+make track-test               # 跟踪器单测（5 项）
 
-bash tools/build_cam_board.sh          # 编译相机固件
-powershell tools/build_pango.ps1 -Name x1   # 构建位流（自动 prep）
+bash tools/build_cam_board.sh                         # 普通固件
+EXTRA_DEFS='-DRPS_WEIGHTS' bash tools/build_cam_board.sh   # 手势识别固件
+
+powershell tools/build_pango.ps1 -Name x1             # 位流（自动 prep）
 powershell tools/program_board.ps1 -Bitstream <sbit>
 powershell tools/upload.ps1 -Port COM9 -File build/fw/cam_board.bin
 ```
 
+手势识别相关的一切都在 `subprojects/rps/`，从那里的 README 开始看。
+
 ## 三条铁律
 
-1. **改 RTL 后必须 `make stereo-sim` / `make yolo` 全绿再综合**；
-2. **PDS 前必须 `pango_prep.py`**（否则编译的是上次的 RTL）——用 `build_pango.ps1` 就不会漏；
-3. **固件上传前必须复位**（JTAG 重烧），因为 loader 只在启动时跑一次。
+1. 改 RTL 后先跑 `make stereo-sim` / `make yolo`，再综合；
+2. PDS 前必须跑 `pango_prep.py`（用 `build_pango.ps1` 就不会漏）；
+3. 上传固件前必须复位（loader 只在启动时跑一次）。

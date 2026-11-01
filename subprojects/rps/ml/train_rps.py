@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 CLASSES = ["rock", "paper", "scissors"]
 
 
@@ -90,7 +90,7 @@ class Net(nn.Module):
 
 
 def main():
-    d = np.load(ROOT / "build" / "rps_dataset.npz")
+    d = np.load(ROOT / "subprojects" / "rps" / "data" / "dataset.npz")
     x, y = d["x"], d["y"]
     rng = np.random.default_rng(11)
     tr, te = [], []
@@ -133,9 +133,9 @@ def main():
                   f"test {acc * 100:5.1f}%  augmented-test {acc_aug * 100:5.1f}%")
             if acc_aug > best:
                 best = acc_aug
-                torch.save(net.state_dict(), ROOT / "build" / "rps_net.pt")
+                torch.save(net.state_dict(), ROOT / "subprojects" / "rps" / "data" / "model.pt")
 
-    net.load_state_dict(torch.load(ROOT / "build" / "rps_net.pt"))
+    net.load_state_dict(torch.load(ROOT / "subprojects" / "rps" / "data" / "model.pt"))
     net.eval()
     with torch.no_grad():
         pred = net(xte).argmax(1).numpy()
@@ -146,7 +146,7 @@ def main():
     print(cm)
 
     sd = {k: v.detach().numpy().astype(np.float32) for k, v in net.state_dict().items()}
-    np.savez(ROOT / "build" / "rps_float.npz",
+    np.savez(ROOT / "subprojects" / "rps" / "data" / "float.npz",
              w1=sd["c1.weight"], b1=sd["c1.bias"],
              w2=sd["c2.weight"], b2=sd["c2.bias"],
              w3=sd["c3.weight"], b3=sd["c3.bias"],

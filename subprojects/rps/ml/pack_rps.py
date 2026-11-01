@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tools" / "model"))
 
 import pack_weights as pw   # reuse the row packing and cfg builder
@@ -44,13 +44,13 @@ def expand(x):
 
 
 def main():
-    d = np.load(ROOT / "build" / "rps_float.npz")
+    d = np.load(ROOT / "subprojects" / "rps" / "data" / "float.npz")
     w = [d["w1"], d["w2"], d["w3"]]
     b = [d["b1"], d["b2"], d["b3"]]
     wh = d["wh"]
     bh = d["bh"]
 
-    ds = np.load(ROOT / "build" / "rps_dataset.npz")
+    ds = np.load(ROOT / "subprojects" / "rps" / "data" / "dataset.npz")
     x = ds["x"]
     y = ds["y"]
     rng = np.random.default_rng(5)

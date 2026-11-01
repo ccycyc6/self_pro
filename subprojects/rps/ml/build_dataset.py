@@ -12,13 +12,18 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 CLASSES = ["rock", "paper", "scissors"]
 
 
 def load(name):
-    d = np.load(ROOT / "build" / f"rps_{name}.npz")
-    return d["x"]
+    path = ROOT / "build" / f"rps_{name}.npz"
+    if not path.exists():
+        msg = ("missing " + path.name + ": record the three gestures first\n"
+               "  make -C subprojects/rps capture\n"
+               "  (each gesture in its own pass, so the labels are certain)")
+        raise SystemExit(msg)
+    return np.load(path)["x"]
 
 
 def norm(x):
@@ -46,7 +51,7 @@ def main():
     x = np.concatenate(xs)
     y = np.concatenate(ys)
 
-    np.savez_compressed(ROOT / "build" / "rps_dataset.npz", x=x, y=y)
+    np.savez_compressed(ROOT / "subprojects" / "rps" / "data" / "dataset.npz", x=x, y=y)
     print(f"dataset: {x.shape} -> build/rps_dataset.npz")
 
     # held-out split, stratified

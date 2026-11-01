@@ -124,3 +124,10 @@ decodes the head's centroid for the demo.
 - The image source is the packed 32x32 test set in firmware; a camera/video
   front end is intentionally not included.
 - The detector is a small 32x32 model, not a full tiny-YOLO graph.
+
+
+## 子项目
+
+| 项目 | 说明 |
+|---|---|
+| [石头剪刀布手势识别](subprojects/rps/README.md) | 单手手势实时识别：固定取景框 + 32×32 INT8 分类器，串口每秒输出结果 |
