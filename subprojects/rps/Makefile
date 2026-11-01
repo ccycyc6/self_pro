@@ -7,7 +7,7 @@ SHELL := /bin/bash
 ROOT  := $(abspath ../..)
 PY    ?= python3
 PORT  ?= COM9
-BIT   ?= build/release/s3h_video_fb_top.sbit
+BIT   ?= ../../bitstreams/s3h_video_fb_top.sbit
 
 .PHONY: help test repro build flash watch check capture dataset train pack clean
 

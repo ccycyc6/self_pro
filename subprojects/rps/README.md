@@ -55,7 +55,7 @@ hand: none     (window 148..164, no contrast)
 
 ```bash
 # 1. 编译并烧写（位流已归档，通常不用重建）
-powershell tools/program_board.ps1 -Bitstream build/release/s3h_video_fb_top.sbit
+powershell tools/program_board.ps1 -Bitstream bitstreams/s3h_video_fb_top.sbit
 EXTRA_DEFS='-DRPS_WEIGHTS' bash tools/build_cam_board.sh
 powershell tools/upload.ps1 -Port COM9 -File build/fw/cam_board.bin
 
